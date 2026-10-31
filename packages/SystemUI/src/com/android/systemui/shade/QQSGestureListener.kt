@@ -44,14 +44,14 @@ class QQSGestureListener @Inject constructor(
     init {
         val contentObserver = object : ContentObserver(null) {
             override fun onChange(selfChange: Boolean) {
-                doubleTapToSleepEnabled = Settings.System.getInt(
-                        context.contentResolver, Settings.System.DOUBLE_TAP_SLEEP_GESTURE,
+                doubleTapToSleepEnabled = Settings.Secure.getInt(
+                        context.contentResolver, Settings.Secure.DOUBLE_TAP_TO_SLEEP,
                         if (context.resources.getBoolean(com.android.internal.
                                 R.bool.config_dt2sGestureEnabledByDefault)) 1 else 0) != 0
             }
         }
         context.contentResolver.registerContentObserver(
-                Settings.System.getUriFor(Settings.System.DOUBLE_TAP_SLEEP_GESTURE),
+                Settings.Secure.getUriFor(Settings.Secure.DOUBLE_TAP_TO_SLEEP),
                 false, contentObserver)
         contentObserver.onChange(true)
 
