@@ -40,9 +40,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -121,6 +123,7 @@ import com.android.internal.R as InternalR
 import kotlin.math.abs
 import platform.test.motion.compose.values.MotionTestValueKey
 import platform.test.motion.compose.values.motionTestValues
+import org.uwuaosp.systemui.qsstyle.CircularTileHeight
 import org.uwuaosp.systemui.qsstyle.LocalQSTileStyle
 
 private const val TEST_TAG_TILE_ICON = "qs_tile_icon"
@@ -345,8 +348,13 @@ private fun CircularTileContent(
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = modifier.fillMaxSize().padding(horizontal = CircularTileHorizontalPadding),
+        verticalArrangement = Arrangement.Top,
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .wrapContentHeight(unbounded = true)
+                .heightIn(min = CircularTileHeight)
+                .padding(horizontal = CircularTileHorizontalPadding),
     ) {
         if (expandable != null) {
             // Hosting the launch/return transitions on the icon makes their bounds a square, so
@@ -373,7 +381,7 @@ private fun CircularTileContent(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
             modifier =
-                Modifier.fillMaxWidth().height(CircularTilePrimaryLabelHeight).graphicsLayer {
+                Modifier.fillMaxWidth().heightIn(min = CircularTilePrimaryLabelHeight).graphicsLayer {
                     alpha = if (circularLabelsVisible) 1f else 0f
                 },
         ) {
@@ -400,7 +408,7 @@ private fun CircularTileContent(
         // tiles that provide a secondary label are centered as a taller column and their icons
         // appear higher than neighboring tiles.
         Box(
-            modifier = Modifier.fillMaxWidth().height(CircularTileSecondaryLabelHeight),
+            modifier = Modifier.fillMaxWidth().heightIn(min = CircularTileSecondaryLabelHeight),
             contentAlignment = Alignment.Center,
         ) {
             if (!TextUtils.isEmpty(secondaryLabel)) {

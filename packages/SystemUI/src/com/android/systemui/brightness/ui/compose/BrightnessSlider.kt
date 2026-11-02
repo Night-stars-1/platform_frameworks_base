@@ -565,7 +565,9 @@ fun BrightnessSliderContainer(
     Box(
         modifier =
             modifier
-                .padding(vertical = { sliderDimensions.verticalPadding.roundToPx() })
+                .thenIf(!circular) {
+                    Modifier.padding(vertical = { sliderDimensions.verticalPadding.roundToPx() })
+                }
                 .fillMaxWidth()
                 .sysuiResTag("brightness_slider")
     ) {

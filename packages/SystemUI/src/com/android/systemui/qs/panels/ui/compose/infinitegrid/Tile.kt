@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
@@ -204,9 +205,11 @@ fun ContentScope.Tile(
             animateColorAsState(
                 colors.background,
                 animationSpec =
-                    if (dualShadeMotion != null)
+                    if (dualShadeMotion != null) {
                         tween(DualShadeMotion.ToggleDuration, easing = DualShadeMotion.ToggleEasing)
-                    else spring(),
+                    } else {
+                        spring()
+                    },
                 label = "QSTileBackgroundColor",
             )
         val isDualTarget = uiState.handlesToggleClick
@@ -243,8 +246,11 @@ fun ContentScope.Tile(
         }
 
         val expandable =
-            if (dynamicTargetResolutionEnabled()) tile.expandable
-            else remember { Expandable(mutableSetOf()) }
+            if (dynamicTargetResolutionEnabled()) {
+                tile.expandable
+            } else {
+                remember { Expandable(mutableSetOf()) }
+            }
         Tooltip(
             text = uiState.label,
             modifier = modifier,
@@ -586,7 +592,13 @@ fun TileContainer(
     Box(
         modifier =
             modifier
-                .height(if (circular) CircularTileHeight else TileHeight)
+                .then(
+                    if (circular) {
+                        Modifier.heightIn(min = CircularTileHeight)
+                    } else {
+                        Modifier.height(TileHeight)
+                    }
+                )
                 .fillMaxWidth()
                 .tileCombinedClickable(
                     onClick = onClick ?: {},
