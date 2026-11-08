@@ -1,46 +1,46 @@
-1:<?xml version="1.0" encoding="utf-8"?>
-2:<!--
-3:/*
-4: * Copyright (c) 2017 The LineageOS Project
-5: *
-6: * Licensed under the Apache License, Version 2.0 (the "License");
-7: * you may not use this file except in compliance with the License.
-8: * You may obtain a copy of the License at
-9: *
-10: *     http://www.apache.org/licenses/LICENSE-2.0
-11: *
-12: * Unless required by applicable law or agreed to in writing, software
-13: * distributed under the License is distributed on an "AS IS" BASIS,
-14: * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-15: * See the License for the specific language governing permissions and
-16: * limitations under the License.
-17: */
-18:-->
-19:<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-20:        package="com.android.systemui">
-21:
-22:    <!-- QS Tiles -->
-23:    <uses-permission android:name="android.permission.MAINLINE_NETWORK_STACK" />
-24:    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
-25:    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
-26:    <uses-permission android:name="lineageos.permission.HARDWARE_ABSTRACTION_ACCESS" />
-27:
-28:    <!-- SystemUI Tuner -->
-29:    <application>
-30:        <activity-alias
-31:            android:name=".tuner.StatusBarTuner"
-32:            android:targetActivity=".tuner.TunerActivity"
-33:            android:icon="@drawable/tuner"
-34:            android:theme="@style/Theme.SubSettingsBase.Expressive"
-35:            android:label="@string/status_bar_icons_title"
-36:            android:process=":tuner"
-37:            android:exported="true">
-38:            <intent-filter>
-39:                <action android:name="com.android.settings.action.STATUS_BAR_TUNER" />
-40:                <category android:name="android.intent.category.DEFAULT" />
-41:            </intent-filter>
-42:        </activity-alias>
-43:        <provider
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+/*
+ * Copyright (c) 2017 The LineageOS Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+        package="com.android.systemui">
+
+    <!-- QS Tiles -->
+    <uses-permission android:name="android.permission.MAINLINE_NETWORK_STACK" />
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
+    <uses-permission android:name="lineageos.permission.HARDWARE_ABSTRACTION_ACCESS" />
+
+    <!-- SystemUI Tuner -->
+    <application>
+        <activity-alias
+            android:name=".tuner.StatusBarTuner"
+            android:targetActivity=".tuner.TunerActivity"
+            android:icon="@drawable/tuner"
+            android:theme="@style/Theme.SubSettingsBase.Expressive"
+            android:label="@string/status_bar_icons_title"
+            android:process=":tuner"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.android.settings.action.STATUS_BAR_TUNER" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+        <provider
             android:name="com.android.systemui.island.IslandPermissionProvider"
             android:authorities="miui.statusbar.notification.public"
             android:enabled="@bool/config_uwuIslandEnabled"
@@ -55,5 +55,5 @@
             android:label="Island"
             android:excludeFromRecents="true" />
     </application>
-44:
-45:</manifest>
+
+</manifest>
