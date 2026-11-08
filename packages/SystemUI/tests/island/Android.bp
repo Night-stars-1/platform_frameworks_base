@@ -11,6 +11,8 @@ android_test {
     platform_apis: true,
     certificate: "platform",
     test_suites: ["device-tests"],
+    // Soong adds the target app's combined header jar to the test classpath without
+    // merging its manifest or including its static resource package in the test APK.
     instrumentation_for: "SystemUI",
     use_resource_processor: true,
     static_libs: [
@@ -18,10 +20,7 @@ android_test {
         "androidx.test.ext.junit",
         "androidx.test.runner",
     ],
-    // Resolve production classes at compile time without merging the SystemUI app manifest;
-    // instrumentation_for supplies the actual target application at runtime.
     libs: [
-        "SystemUI-core",
         "android.test.runner.stubs.system",
         "android.test.base.stubs.system",
     ],
