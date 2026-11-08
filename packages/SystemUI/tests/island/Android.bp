@@ -1,0 +1,26 @@
+// Copyright (C) 2026 The uwuAOSP Project
+// SPDX-License-Identifier: Apache-2.0
+
+package {
+    default_applicable_licenses: ["frameworks_base_packages_SystemUI_license"],
+}
+
+android_test {
+    name: "SystemUIIslandTests",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    certificate: "platform",
+    test_suites: ["device-tests"],
+    instrumentation_for: "SystemUI",
+    use_resource_processor: true,
+    static_libs: [
+        "SystemUI-core",
+        "androidx.test.core",
+        "androidx.test.ext.junit",
+        "androidx.test.runner",
+    ],
+    libs: [
+        "android.test.runner.stubs.system",
+        "android.test.base.stubs.system",
+    ],
+}
