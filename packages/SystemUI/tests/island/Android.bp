@@ -14,12 +14,14 @@ android_test {
     instrumentation_for: "SystemUI",
     use_resource_processor: true,
     static_libs: [
-        "SystemUI-core",
         "androidx.test.core",
         "androidx.test.ext.junit",
         "androidx.test.runner",
     ],
+    // Resolve production classes at compile time without merging the SystemUI app manifest;
+    // instrumentation_for supplies the actual target application at runtime.
     libs: [
+        "SystemUI-core",
         "android.test.runner.stubs.system",
         "android.test.base.stubs.system",
     ],
