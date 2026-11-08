@@ -69,7 +69,8 @@ fun splitShadeActions(): Array<Pair<UserAction, UserActionResult>> {
 
 /** Returns collection of [UserAction] to [UserActionResult] pairs for opening the dual shade. */
 fun dualShadeActions(
-    twoFingerSwipeEnabled: Boolean = true
+    twoFingerSwipeEnabled: Boolean = true,
+    endHalfOpensQuickSettings: Boolean = false,
 ): Array<Pair<UserAction, UserActionResult>> {
     return buildList {
             allPointerTypesButMouse {
@@ -80,6 +81,17 @@ fun dualShadeActions(
                     Swipe.Down(fromSource = SceneContainerArea.TopEdgeEndHalf, pointerType = it) to
                         Overlays.QuickSettingsShade
                 )
+                if (endHalfOpensQuickSettings) {
+                    // Below the status bar, the end half and end edge also open Quick Settings.
+                    add(
+                        Swipe.Down(fromSource = SceneContainerArea.EndHalf, pointerType = it) to
+                            Overlays.QuickSettingsShade
+                    )
+                    add(
+                        Swipe.Down(fromSource = SceneContainerArea.EndEdge, pointerType = it) to
+                            Overlays.QuickSettingsShade
+                    )
+                }
             }
             if (twoFingerSwipeEnabled) {
                 add(Swipe.Down(pointerCount = 2) to Overlays.QuickSettingsShade)

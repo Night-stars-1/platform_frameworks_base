@@ -45,7 +45,10 @@ constructor(
                     ShadeMode.Single -> singleShadeActions(requireTwoPointersForTopEdgeForQs = true)
                     ShadeMode.Split -> splitShadeActions()
                     ShadeMode.Dual ->
-                        dualShadeActions(twoFingerSwipeEnabled = twoFingerSwipeEnabled)
+                        dualShadeActions(
+                            twoFingerSwipeEnabled = twoFingerSwipeEnabled,
+                            endHalfOpensQuickSettings = true,
+                        )
                 }.associate { it }
             )
         }
