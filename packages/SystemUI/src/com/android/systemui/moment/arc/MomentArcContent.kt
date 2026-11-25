@@ -39,6 +39,7 @@ internal fun MomentArcContent(
     state: MomentArcUiState,
     loadApps: suspend () -> MomentArcApps,
     onLaunch: (MomentArcTarget) -> Unit,
+    onBack: () -> Unit,
     onDismiss: () -> Unit,
     directInput: () -> Boolean,
     onArcTouch: (Float, Float, Boolean, Boolean) -> Unit,
@@ -144,7 +145,7 @@ internal fun MomentArcContent(
             }
         }
         if (state.panelVisible) {
-            MomentArcAllAppsPanel(state, onLaunch, onGestureSelection, onDismiss)
+            MomentArcAllAppsPanel(state, onLaunch, onGestureSelection, onBack, onDismiss)
         }
     }
 }

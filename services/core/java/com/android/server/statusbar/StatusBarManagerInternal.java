@@ -48,6 +48,9 @@ public interface StatusBarManagerInternal {
 
     void showRecentApps(boolean triggeredFromAltTab);
 
+    /** Request Moment's application browser; false when SystemUI cannot receive the command. */
+    boolean showMomentAllApps(int displayId, int userId);
+
     void hideRecentApps(boolean triggeredFromAltTab, boolean triggeredFromHomeKey);
 
     /** Collapses the notification shade. */

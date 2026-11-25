@@ -17,8 +17,10 @@
 package com.android.server.permission.access.appop
 
 import android.app.AppOpsManager
+import android.app.UwuAppPolicyManager
 import android.companion.virtual.VirtualDeviceManager
 import android.os.Binder
+import android.os.Bundle
 import android.os.Handler
 import android.os.UserHandle
 import android.permission.PermissionManager
@@ -40,11 +42,13 @@ import com.android.server.permission.access.GetStateScope
 import com.android.server.permission.access.PackageUri
 import com.android.server.permission.access.PermissionUri
 import com.android.server.permission.access.UidUri
+import com.android.server.permission.access.WriteMode
 import com.android.server.permission.access.appop.AppOpModes.MODE_ALLOWED
 import com.android.server.permission.access.appop.AppOpModes.MODE_FOREGROUND
 import com.android.server.permission.access.appop.AppOpModes.MODE_IGNORED
 import com.android.server.permission.access.collection.forEachIndexed
 import com.android.server.permission.access.collection.set
+import com.android.server.permission.access.immutable.forEachIndexed
 import com.android.server.permission.access.permission.AppIdPermissionPolicy
 import com.android.server.permission.access.permission.DevicePermissionPolicy
 import com.android.server.permission.access.permission.PermissionFlags
@@ -89,6 +93,68 @@ class AppOpService(private val service: AccessCheckingService) : AppOpsCheckingS
 
         appIdPolicy.addOnAppOpModeChangedListener(OnAppIdAppOpModeChangedListener())
         packagePolicy.addOnAppOpModeChangedListener(OnPackageAppOpModeChangedListener())
+    }
+
+    override fun getUwuAppPolicies(userId: Int): Bundle =
+        service.getState {
+            val result = Bundle()
+            val user = state.userStates[userId] ?: return@getState result
+            result.putInt(UwuAppPolicyManager.MIGRATIONS, user.uwuPolicyMigrationFlags)
+            val ops = UwuAppPolicyManager.operations()
+            user.packageAppOpModes.forEachIndexed { _, name, modes ->
+                if (ops.any { AppOpsManager.opToPublicName(it) in modes }) {
+                    val raw =
+                        IntArray(ops.size) { index ->
+                            modes[AppOpsManager.opToPublicName(ops[index])]
+                                ?: AppOpsManager.opToDefaultMode(ops[index])
+                        }
+                    result.putIntArray(name, UwuAppPolicyManager.decode(raw))
+                }
+            }
+            result
+        }
+
+    override fun setUwuAppPolicies(
+        userId: Int,
+        packages: Array<String?>,
+        types: IntArray,
+        policies: IntArray,
+        migrationFeature: Int,
+    ) {
+        service.mutateState {
+            val user = newState.userStates[userId] ?: throw IllegalArgumentException("Unknown user")
+            if (migrationFeature != 0 && user.uwuPolicyMigrationFlags and migrationFeature != 0) {
+                return@mutateState
+            }
+            if (
+                migrationFeature == 0 &&
+                    types.any {
+                        user.uwuPolicyMigrationFlags and UwuAppPolicyManager.feature(it) == 0
+                    }
+            )
+                throw IllegalStateException("App policies not initialized")
+            packages.forEachIndexed { index, name ->
+                if (name == null || name !in newState.externalState.packageStates) {
+                    return@forEachIndexed
+                }
+                val pairs = UwuAppPolicyManager.encode(types[index], policies[index])
+                for (offset in pairs.indices step 2) {
+                    with(packagePolicy) {
+                        setAppOpMode(
+                            name,
+                            userId,
+                            AppOpsManager.opToPublicName(pairs[offset]),
+                            pairs[offset + 1],
+                        )
+                    }
+                }
+            }
+            if (migrationFeature != 0) {
+                newState
+                    .mutateUserState(userId, WriteMode.SYNCHRONOUS)!!
+                    .setUwuPolicyMigrationFlags(user.uwuPolicyMigrationFlags or migrationFeature)
+            }
+        }
     }
 
     @VisibleForTesting

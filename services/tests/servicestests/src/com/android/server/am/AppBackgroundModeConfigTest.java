@@ -19,7 +19,6 @@ package com.android.server.am;
 import static com.google.common.truth.Truth.assertThat;
 
 import android.content.pm.ApplicationInfo;
-import android.content.pm.ServiceInfo;
 import android.os.Process;
 
 import androidx.test.filters.SmallTest;
@@ -28,20 +27,6 @@ import org.junit.Test;
 
 @SmallTest
 public class AppBackgroundModeConfigTest {
-    @Test
-    public void ocrDownload_requiresExactSystemServiceAndDataSync() {
-        final String pkg = "org.uwuaosp.aicore";
-        final String cls = pkg + ".ocr.OcrService";
-        final int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-        assertThat(AppBackgroundModeConfig.isOcrDownloadService(pkg, cls, true, type)).isTrue();
-        assertThat(AppBackgroundModeConfig.isOcrDownloadService(pkg, cls, false, type)).isFalse();
-        assertThat(AppBackgroundModeConfig.isOcrDownloadService(pkg, cls, true, 0)).isFalse();
-        assertThat(AppBackgroundModeConfig.isOcrDownloadService("other", cls, true, type))
-                .isFalse();
-        assertThat(AppBackgroundModeConfig.isOcrDownloadService(pkg, "other", true, type))
-                .isFalse();
-    }
-
     @Test
     public void parse_normalizesAndSortsAllowedModes() {
         final AppBackgroundModeConfig.ParseResult result = AppBackgroundModeConfig.parse(

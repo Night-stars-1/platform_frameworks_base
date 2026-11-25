@@ -48,6 +48,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
+import android.app.UwuAppPolicyManager;
+import android.os.Bundle;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -57,6 +59,7 @@ public class SensorService extends SystemService {
     private static final String START_NATIVE_SENSOR_SERVICE = "StartNativeSensorService";
     private static final long LAUNCH_DENIAL_DURATION_MILLIS = 6_000L;
     private final Object mLock = new Object();
+    private final Object mPolicyRefreshLock = new Object();
     @GuardedBy("mLock")
     private final ArrayMap<ProximityActiveListener, ProximityListenerProxy> mProximityListeners =
             new ArrayMap<>();
@@ -137,15 +140,9 @@ public class SensorService extends SystemService {
     }
 
     private void initializeApplicationSensorPolicies() {
-        final ContentResolver resolver = getContext().getContentResolver();
-        resolver.registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.UWU_APP_SENSOR_POLICIES), false,
-                new ContentObserver(mHandler) {
-                    @Override
-                    public void onChange(boolean selfChange, android.net.Uri uri, int userId) {
-                        reloadPolicies(userId);
-                    }
-                }, UserHandle.USER_ALL);
+        UwuAppPolicyManager.watch(getContext(), mHandler, UwuAppPolicyManager.FEATURE_SENSOR, this::reloadPolicies);
+
+        UwuAppPolicyManager.watchPackageRemoval(getContext(), mHandler, this::reloadPolicies);
 
         final UsageStatsManagerInternal usageStats =
                 LocalServices.getService(UsageStatsManagerInternal.class);
@@ -201,12 +198,33 @@ public class SensorService extends SystemService {
     }
 
     private void reloadPolicies(int userId) {
+        synchronized (mPolicyRefreshLock) { reloadPoliciesSerialized(userId); }
+    }
+
+    private void reloadPoliciesSerialized(int userId) {
         if (userId < UserHandle.USER_SYSTEM) {
             return;
         }
-        final ArrayMap<String, Integer> policies = parsePolicies(
-                Settings.Secure.getStringForUser(getContext().getContentResolver(),
-                        Settings.Secure.UWU_APP_SENSOR_POLICIES, userId));
+        Bundle snapshot = UwuAppPolicyManager.snapshot(userId);
+        if (!UwuAppPolicyManager.migrated(snapshot, UwuAppPolicyManager.FEATURE_SENSOR)) {
+            final ArrayMap<String, Integer> old = parsePolicies(Settings.Secure.getStringForUser(
+                    getContext().getContentResolver(), Settings.Secure.UWU_APP_SENSOR_POLICIES,
+                    userId));
+            final Bundle legacy = new Bundle();
+            for (int i = 0; i < old.size(); i++) {
+                int[] values = UwuAppPolicyManager.defaults();
+                values[UwuAppPolicyManager.SENSOR] = old.valueAt(i);
+                legacy.putIntArray(old.keyAt(i), values);
+            }
+            UwuAppPolicyManager.migrate(userId, UwuAppPolicyManager.FEATURE_SENSOR, legacy);
+            snapshot = UwuAppPolicyManager.snapshot(userId);
+        }
+        final ArrayMap<String, Integer> policies = new ArrayMap<>();
+        for (String name : snapshot.keySet()) {
+            if (UwuAppPolicyManager.MIGRATIONS.equals(name)) continue;
+            int policy = UwuAppPolicyManager.policy(snapshot, name, UwuAppPolicyManager.SENSOR);
+            if (policy != Settings.Secure.UWU_APP_SENSOR_POLICY_ALLOW) policies.put(name, policy);
+        }
         synchronized (mLock) {
             final ArrayMap<String, Integer> oldPolicies = mPoliciesByUser.get(userId);
             final ArrayMap<String, Boolean> affected = new ArrayMap<>();
@@ -221,8 +239,22 @@ public class SensorService extends SystemService {
             mPoliciesByUser.put(userId, policies);
             for (int i = 0; i < affected.size(); i++) {
                 final String packageName = affected.keyAt(i);
+                final long now = SystemClock.elapsedRealtime();
                 setApplicationSensorAccessNative(mPtr, userId, packageName,
-                        !isDeniedLocked(userId, packageName, SystemClock.elapsedRealtime()));
+                        !isDeniedLocked(userId, packageName, now));
+                if (getPolicyLocked(userId, packageName)
+                        == Settings.Secure.UWU_APP_SENSOR_POLICY_DENY_ON_LAUNCH
+                        && (oldPolicies == null || oldPolicies.getOrDefault(packageName, 0)
+                                != Settings.Secure.UWU_APP_SENSOR_POLICY_DENY_ON_LAUNCH)) {
+                    final ArrayMap<String, Long> resumed = mLastResumedByUser.get(userId);
+                    final long resumedAt = resumed == null ? -1L
+                            : resumed.getOrDefault(packageName, -1L);
+                    final long remaining = resumedAt + LAUNCH_DENIAL_DURATION_MILLIS - now;
+                    if (resumedAt >= 0 && remaining > 0) {
+                        mHandler.postDelayed(
+                                () -> finishLaunchDenial(userId, packageName, resumedAt), remaining);
+                    }
+                }
             }
         }
     }

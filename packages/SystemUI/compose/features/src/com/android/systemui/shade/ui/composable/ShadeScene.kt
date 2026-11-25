@@ -57,6 +57,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -91,6 +92,8 @@ import com.android.compose.modifiers.thenIf
 import com.android.internal.jank.InteractionJankMonitor
 import com.android.systemui.brightness.ui.compose.BrightnessSliderContainer
 import com.android.systemui.brightness.ui.compose.ContainerColors
+import com.android.systemui.common.ui.compose.windowinsets.CutoutLocation
+import com.android.systemui.common.ui.compose.windowinsets.LocalDisplayCutout
 import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.lifecycle.ExclusiveActivatable
@@ -381,12 +384,7 @@ private fun ContentScope.SingleShade(
                     circular &&
                         qsContainerViewModel.isBrightnessSliderVisible &&
                         brightnessSettings.showSlider == 2
-                val qqsLayoutPaddingBottom =
-                    if (showQqsBrightnessSlider && !brightnessSettings.sliderAtTop) {
-                        0.dp
-                    } else {
-                        16.dp
-                    }
+                val qqsLayoutPaddingBottom = 16.dp
                 val qsHorizontalMargin =
                     shadeHorizontalPadding + dimensionResource(id = R.dimen.qs_horizontal_margin)
                 MediaAndQqsLayout(
@@ -459,7 +457,7 @@ private fun ContentScope.SingleShade(
                             {
                                 Element(
                                     key = QuickSettings.Elements.CircularBrightnessSlider,
-                                    modifier = Modifier.offset(y = (-12).dp),
+                                    modifier = Modifier,
                                 ) {
                                     BrightnessSliderContainer(
                                         viewModel =
@@ -529,6 +527,8 @@ private fun MediaAndQqsLayout(
     val modifierAnimated =
         modifier.animateContentSizeNoClip(MaterialTheme.motionScheme.defaultSpatialSpec())
     val brightnessAtTop = brightnessSettings.sliderAtTop
+    val qqsRowSpacing =
+        if (showBrightnessSlider && !brightnessAtTop) CircularQqsMediaSpacing else QqsRowSpacing
     if (mediaInRow) {
         val rowSpacing = dimensionResource(R.dimen.qs_tile_margin_vertical)
         Column(modifier = modifierAnimated) {
@@ -546,10 +546,10 @@ private fun MediaAndQqsLayout(
             if (showBrightnessSlider && !brightnessAtTop) brightness()
         }
     } else {
-        Column(modifier = modifierAnimated, verticalArrangement = spacedBy(QqsRowSpacing)) {
+        Column(modifier = modifierAnimated, verticalArrangement = spacedBy(qqsRowSpacing)) {
             if (showBrightnessSlider && !brightnessAtTop) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    tiles()
+                    Box(modifier = Modifier.circularQqsBrightnessLayoutCompensation()) { tiles() }
                     // Circular QQS keeps the invisible label band inside the tile cells. Group the
                     // bottom slider with those cells so that no second row gap is inserted, while
                     // media (when present) still receives the normal row spacing.
@@ -566,6 +566,18 @@ private fun MediaAndQqsLayout(
 
 /** Vertical gap between the Quick QS rows (tiles, brightness slider and media). */
 private val QqsRowSpacing = 16.dp
+private val CircularQqsMediaSpacing = 28.dp
+
+private val CircularQqsBrightnessLayoutCompensation = 12.dp
+
+private fun Modifier.circularQqsBrightnessLayoutCompensation(): Modifier =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val compensatedHeight =
+            (placeable.height - CircularQqsBrightnessLayoutCompensation.roundToPx())
+                .coerceAtLeast(0)
+        layout(placeable.width, compensatedHeight) { placeable.place(0, 0) }
+    }
 
 @Composable
 private fun ContentScope.SplitShade(

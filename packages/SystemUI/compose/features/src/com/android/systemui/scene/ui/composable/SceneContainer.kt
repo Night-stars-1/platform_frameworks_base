@@ -178,6 +178,7 @@ private fun InternalSceneContainer(
             initialScene = initialSceneKey,
             canChangeScene = { toScene -> viewModel.canChangeScene(toScene) },
             canShowOverlay = { overlay -> viewModel.canShowOrReplaceOverlay(overlay) },
+            canHideOverlay = viewModel::canHideOverlay,
             canReplaceOverlay = { beingReplaced, newlyShown ->
                 viewModel.canShowOrReplaceOverlay(
                     newlyShown = newlyShown,
@@ -198,6 +199,7 @@ private fun InternalSceneContainer(
                 sceneTransitionLatencyMonitor.onTransitionStart(transition)
             },
             onTransitionEnd = { transition ->
+                viewModel.onTransitionFinished(transition)
                 sceneJankMonitor.onTransitionEnd(
                     from = transition.fromContent,
                     to = transition.toContent,

@@ -165,4 +165,8 @@ interface IAppOpsService {
     ParceledListSlice<AppOpsManager.PackageOps> getPackagesForOpsForDevice(in int[] ops, String persistentDeviceId);
     oneway void noteOperationsInBatch(in Map batchedNoteOps);
     List<String> getPackagesWithNonDefaultUidMode(int op, int mode, int userId);
+
+    Bundle getUwuAppPolicies(int userId);
+    void setUwuAppPolicies(int userId, in String[] packages, in int[] types,
+            in int[] policies, int migrationFeature);
 }

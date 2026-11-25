@@ -36,6 +36,7 @@ import android.graphics.drawable.RippleDrawable;
 import android.os.Bundle;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.Gravity;
@@ -61,12 +62,18 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
 
     private static final String EXTRA_PACKAGE_NAME = PACKAGE_NAME + ".extra.CLIPBOARD_PACKAGE";
     private static final String EXTRA_OPERATION = PACKAGE_NAME + ".extra.CLIPBOARD_OPERATION";
+    private static final String EXTRA_PROMPT_ID = PACKAGE_NAME + ".extra.CLIPBOARD_PROMPT_ID";
+    private static final String EXTRA_PROMPT_EXPIRES_AT =
+            PACKAGE_NAME + ".extra.CLIPBOARD_PROMPT_EXPIRES_AT";
 
     public static final int OPERATION_READ = 0;
     public static final int OPERATION_WRITE = 1;
 
     private int mUserId;
     private int mOperation;
+    private long mPromptId;
+    private long mPromptExpiresAt;
+    private final Runnable mExpirePrompt = this::finish;
     private String mPackageName;
     private CheckBox mPermanentRuleView;
     private boolean mPromptResolved;
@@ -82,8 +89,11 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
         mUserId = intent.getIntExtra(Intent.EXTRA_USER_ID, -1);
         mPackageName = intent.getStringExtra(EXTRA_PACKAGE_NAME);
         mOperation = intent.getIntExtra(EXTRA_OPERATION, -1);
+        mPromptId = intent.getLongExtra(EXTRA_PROMPT_ID, 0);
+        mPromptExpiresAt = intent.getLongExtra(EXTRA_PROMPT_EXPIRES_AT, 0);
         if (mUserId < 0
                 || mPackageName == null
+                || mPromptId <= 0
                 || (mOperation != OPERATION_READ && mOperation != OPERATION_WRITE)) {
             Log.wtf(TAG, "Invalid clipboard access prompt intent: " + intent);
             mPromptResolved = true;
@@ -91,7 +101,21 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
             return;
         }
 
+        if (SystemClock.elapsedRealtime() >= mPromptExpiresAt) {
+            finish();
+            return;
+        }
         showBottomSheet();
+        getWindow().getDecorView().postDelayed(mExpirePrompt,
+                mPromptExpiresAt - SystemClock.elapsedRealtime());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (SystemClock.elapsedRealtime() >= mPromptExpiresAt) {
+            finish();
+        }
     }
 
     private void showBottomSheet() {
@@ -226,6 +250,10 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
 
     @Override
     public void onClick(View view) {
+        if (SystemClock.elapsedRealtime() >= mPromptExpiresAt) {
+            finish();
+            return;
+        }
         final int decision =
                 view.getId() == R.id.app_jump_allow_button
                         ? Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW
@@ -248,7 +276,7 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
         }
         try {
             return clipboard.resolveClipboardAccessPrompt(
-                    mPackageName, mUserId, mOperation, decision, persist);
+                    mPackageName, mUserId, mOperation, decision, persist, mPromptId);
         } catch (RemoteException e) {
             Log.e(TAG, "Clipboard service rejected the prompt result", e);
             return false;
@@ -257,6 +285,7 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
 
     @Override
     protected void onDestroy() {
+        getWindow().getDecorView().removeCallbacks(mExpirePrompt);
         if (isFinishing() && !mPromptResolved && mPackageName != null) {
             resolvePrompt(Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ASK, false);
             mPromptResolved = true;
@@ -279,12 +308,15 @@ public class ClipboardAccessPromptActivity extends Activity implements View.OnCl
     }
 
     public static Intent createIntent(
-            Context context, int userId, String packageName, int operation) {
+            Context context, int userId, String packageName, int operation, long promptId,
+            long promptExpiresAt) {
         return new Intent()
                 .setClass(context, ClipboardAccessPromptActivity.class)
                 .putExtra(Intent.EXTRA_USER_ID, userId)
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)
                 .putExtra(EXTRA_OPERATION, operation)
+                .putExtra(EXTRA_PROMPT_ID, promptId)
+                .putExtra(EXTRA_PROMPT_EXPIRES_AT, promptExpiresAt)
                 .setFlags(
                         Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
     }

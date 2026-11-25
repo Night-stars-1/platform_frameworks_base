@@ -165,7 +165,7 @@ public class FakeClipboardService extends IClipboard.Stub {
 
     @Override
     public boolean resolveClipboardAccessPrompt(String packageName, int userId, int operation,
-            int decision, boolean persist) {
+            int decision, boolean persist, long promptId) {
         return false;
     }
 }

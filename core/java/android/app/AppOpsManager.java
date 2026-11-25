@@ -1829,8 +1829,26 @@ public class AppOpsManager {
     public static final int OP_ACCESS_HID = AppOpEnums.APP_OP_ACCESS_HID;
 
     /** @hide */
+    public static final int OP_UWU_READ_CLIPBOARD = AppOpEnums.APP_OP_UWU_READ_CLIPBOARD;
+    /** @hide */
+    public static final int OP_UWU_WRITE_CLIPBOARD = AppOpEnums.APP_OP_UWU_WRITE_CLIPBOARD;
+    /** @hide */
+    public static final int OP_UWU_CLIPBOARD_READ_PROMPT = AppOpEnums.APP_OP_UWU_CLIPBOARD_READ_PROMPT;
+    /** @hide */
+    public static final int OP_UWU_CLIPBOARD_WRITE_PROMPT = AppOpEnums.APP_OP_UWU_CLIPBOARD_WRITE_PROMPT;
+    /** @hide */
+    public static final int OP_UWU_SENSOR_ACCESS = AppOpEnums.APP_OP_UWU_SENSOR_ACCESS;
+    /** @hide */
+    public static final int OP_UWU_SENSOR_ACCESS_ON_LAUNCH = AppOpEnums.APP_OP_UWU_SENSOR_ACCESS_ON_LAUNCH;
+    /** @hide */
+    public static final int OP_UWU_START_ACTIVITY = AppOpEnums.APP_OP_UWU_START_ACTIVITY;
+    /** @hide */
+    public static final int OP_UWU_RECEIVE_ACTIVITY = AppOpEnums.APP_OP_UWU_RECEIVE_ACTIVITY;
+
+
+    /** @hide */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
-    public static final int _NUM_OP = 179;
+    public static final int _NUM_OP = 187;
 
     /**
      * All app ops represented as strings.
@@ -2922,6 +2940,24 @@ public class AppOpsManager {
      */
     public static final String OPSTR_ACCESS_HID = "android:access_hid";
 
+    /** @hide */
+    public static final String OPSTR_UWU_READ_CLIPBOARD = "android:uwu_read_clipboard";
+    /** @hide */
+    public static final String OPSTR_UWU_WRITE_CLIPBOARD = "android:uwu_write_clipboard";
+    /** @hide */
+    public static final String OPSTR_UWU_CLIPBOARD_READ_PROMPT = "android:uwu_clipboard_read_prompt";
+    /** @hide */
+    public static final String OPSTR_UWU_CLIPBOARD_WRITE_PROMPT = "android:uwu_clipboard_write_prompt";
+    /** @hide */
+    public static final String OPSTR_UWU_SENSOR_ACCESS = "android:uwu_sensor_access";
+    /** @hide */
+    public static final String OPSTR_UWU_SENSOR_ACCESS_ON_LAUNCH = "android:uwu_sensor_access_on_launch";
+    /** @hide */
+    public static final String OPSTR_UWU_START_ACTIVITY = "android:uwu_start_activity";
+    /** @hide */
+    public static final String OPSTR_UWU_RECEIVE_ACTIVITY = "android:uwu_receive_activity";
+
+
     /** {@link #sAppOpsToNote} not initialized yet for this op */
     private static final byte SHOULD_COLLECT_NOTE_OP_NOT_INITIALIZED = 0;
     /** Should not collect noting of this app-op in {@link #sAppOpsToNote} */
@@ -3688,7 +3724,31 @@ public class AppOpsManager {
                 "ACCESS_HID", AppOpInfo.PCC_MODE_INHERIT)
                 .setPermission(
                     com.android.hardware.input.Flags.hidApi()
-                            ? Manifest.permission.ACCESS_HID : null).build()
+                            ? Manifest.permission.ACCESS_HID : null).build(),
+        new AppOpInfo.Builder(OP_UWU_READ_CLIPBOARD, OPSTR_UWU_READ_CLIPBOARD,
+                "UWU_READ_CLIPBOARD", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_DEFAULT).build(),
+        new AppOpInfo.Builder(OP_UWU_WRITE_CLIPBOARD, OPSTR_UWU_WRITE_CLIPBOARD,
+                "UWU_WRITE_CLIPBOARD", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_DEFAULT).build(),
+        new AppOpInfo.Builder(OP_UWU_CLIPBOARD_READ_PROMPT, OPSTR_UWU_CLIPBOARD_READ_PROMPT,
+                "UWU_CLIPBOARD_READ_PROMPT", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_IGNORED).build(),
+        new AppOpInfo.Builder(OP_UWU_CLIPBOARD_WRITE_PROMPT, OPSTR_UWU_CLIPBOARD_WRITE_PROMPT,
+                "UWU_CLIPBOARD_WRITE_PROMPT", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_IGNORED).build(),
+        new AppOpInfo.Builder(OP_UWU_SENSOR_ACCESS, OPSTR_UWU_SENSOR_ACCESS,
+                "UWU_SENSOR_ACCESS", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_ALLOWED).build(),
+        new AppOpInfo.Builder(OP_UWU_SENSOR_ACCESS_ON_LAUNCH, OPSTR_UWU_SENSOR_ACCESS_ON_LAUNCH,
+                "UWU_SENSOR_ACCESS_ON_LAUNCH", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_ALLOWED).build(),
+        new AppOpInfo.Builder(OP_UWU_START_ACTIVITY, OPSTR_UWU_START_ACTIVITY,
+                "UWU_START_ACTIVITY", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_DEFAULT).build(),
+        new AppOpInfo.Builder(OP_UWU_RECEIVE_ACTIVITY, OPSTR_UWU_RECEIVE_ACTIVITY,
+                "UWU_RECEIVE_ACTIVITY", AppOpInfo.PCC_MODE_INHERIT)
+                .setDefaultMode(MODE_DEFAULT).build()
     };
 
     // The number of longs needed to form a full bitmask of app ops

@@ -436,6 +436,12 @@ public class StatusBarManagerService extends IStatusBarService.Stub implements D
         }
 
         @Override
+        public boolean showMomentAllApps(int displayId, int userId) {
+            return runWithStatusBarIfPresent(bar -> bar.showMomentAllApps(displayId, userId),
+                    "Cannot send Moment apps command to SystemUI");
+        }
+
+        @Override
         public void startAssist(Bundle args) {
             runWithStatusBarIfPresent(bar -> bar.startAssist(args));
         }

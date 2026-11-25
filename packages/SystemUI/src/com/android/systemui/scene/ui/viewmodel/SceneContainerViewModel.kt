@@ -123,11 +123,13 @@ constructor(
             .map { it.to == KeyguardState.DOZING || it.to == KeyguardState.AOD }
             .hydratedStateOf(false)
 
-    /**
-     * Whether to reject the transition to this ContentKey because the FalsingManager believes the
-     * transition is from a false touch. If null, do not reject the current transition.
-     */
-    private var falsingCheckRejectsTransitionToContent: ContentKey? = null
+    private data class GestureRejection(
+        val transition: TransitionState.Transition,
+        val reason: String,
+    )
+
+    // A rejection applies only to this transition and must not affect a later gesture to the same scene.
+    private var gestureRejection: GestureRejection? = null
 
     /**
      * Whether the last navigation bar visible request was to show navigation bars. If null, no
@@ -224,6 +226,7 @@ constructor(
     }
 
     override suspend fun onDeactivated() {
+        gestureRejection = null
         // Clears the previously-sent MotionEventHandler so the owner of the view-model releases
         // their reference to it.
         motionEventHandlerReceiver(null)
@@ -248,32 +251,43 @@ constructor(
     fun onMotionEvent(event: MotionEvent) {
         powerInteractor.onUserTouch()
         falsingInteractor.onTouchEvent(event)
-        if (
-            event.actionMasked == MotionEvent.ACTION_UP ||
-                event.actionMasked == MotionEvent.ACTION_CANCEL
-        ) {
-            // If there's a current transition driven by user input, check falsing.
-            val toContent = sceneInteractor.transitioningTo.value
-            if (sceneInteractor.isTransitionUserInputOngoing.value && toContent != null) {
-                val isAllowedByFalsing = isInteractionAllowedByFalsing(toContent)
-                // Store the falsing check to be used in the near future by
-                // canChangeScene or canShowOrReplaceOverlay.
-                falsingCheckRejectsTransitionToContent =
-                    if (isAllowedByFalsing) {
-                        null
-                    } else {
-                        toContent
-                    }
-                logger.falsingCheckForContentChange(
-                    from = currentScene,
-                    to = toContent,
-                    isAllowedByFalsing = isAllowedByFalsing,
-                )
-            } else {
-                falsingCheckRejectsTransitionToContent = null
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                gestureRejection = null
+                if (
+                    resources.configuration.smallestScreenWidthDp >= 600 &&
+                        currentScene == Scenes.Lockscreen &&
+                        Overlays.Bouncer !in sceneInteractor.transitionState.currentOverlays
+                ) {
+                    toBouncerTransitionViewModel.recordTabletPinGesture(
+                        event.x,
+                        resources.displayMetrics.widthPixels.toFloat(),
+                    )
+                }
             }
-
-            sceneInteractor.onUserInputFinished()
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                val transition = sceneInteractor.transitionState as? TransitionState.Transition
+                if (transition != null && transition.isUserInputOngoing) {
+                    val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
+                    val rejectionReason =
+                        if (cancelled) "Gesture cancelled"
+                        else if (!isInteractionAllowedByFalsing(transition)) {
+                            "Falsing: false touch detected"
+                        } else null
+                    gestureRejection = rejectionReason?.let { GestureRejection(transition, it) }
+                    if (!cancelled) {
+                        logger.falsingCheckForContentChange(
+                            from = transition.fromContent,
+                            to = transition.toContent,
+                            isAllowedByFalsing = rejectionReason == null,
+                        )
+                    }
+                } else {
+                    gestureRejection = null
+                }
+                sceneInteractor.onUserInputFinished()
+            }
         }
     }
 
@@ -382,6 +396,19 @@ constructor(
             )
         }
         return canShowOrReplaceOverlay
+    }
+
+    /** Apply the current gesture result when dismissing an overlay. */
+    fun canHideOverlay(overlay: OverlayKey): Boolean {
+        val transition =
+            sceneInteractor.transitionState as? TransitionState.Transition.ShowOrHideOverlay
+                ?: return true
+        if (transition.fromContent != overlay) return true
+        return isFalsingAllowingContentChange(overlay, transition.toContent)
+    }
+
+    fun onTransitionFinished(transition: TransitionState.Transition) {
+        if (gestureRejection?.transition === transition) gestureRejection = null
     }
 
     /**
@@ -502,49 +529,62 @@ constructor(
     }
 
     private fun isFalsingAllowingContentChange(from: ContentKey?, to: ContentKey): Boolean {
-        // Only false if the falsing check was for this transition
-        if (falsingCheckRejectsTransitionToContent == to) {
-            showDebuggingToast("${to.debugName} rejected: false touch")
-            logger.logContentChangeRejection(
-                from = from,
-                to = to,
-                originalChangeReason = null,
-                rejectionReason = "Falsing: false touch detected",
-            )
-            falsingCheckRejectsTransitionToContent = null
-            return false
+        val rejected = gestureRejection ?: return true
+        if (
+            rejected.transition !== sceneInteractor.transitionState ||
+                rejected.transition.toContent != to
+        ) {
+            return true
         }
-        falsingCheckRejectsTransitionToContent = null
-        return true
+        showDebuggingToast("${to.debugName} rejected: ${rejected.reason}")
+        logger.logContentChangeRejection(
+            from = from,
+            to = to,
+            originalChangeReason = null,
+            rejectionReason = rejected.reason,
+        )
+        return false
     }
 
-    /**
-     * Returns `true` if transitioning to [content] is permissible by the falsing system; `false`
-     * otherwise.
-     */
-    private fun isInteractionAllowedByFalsing(content: ContentKey): Boolean {
+    /** Classify the actual transition before enforcing lockscreen falsing. */
+    private fun isInteractionAllowedByFalsing(transition: TransitionState.Transition): Boolean {
+        val from = transition.fromContent
+        val to = transition.toContent
         val interactionTypeOrNull =
-            when (content) {
-                Overlays.Bouncer -> Classifier.BOUNCER_SWIPE
-                Scenes.Communal -> Classifier.GLANCEABLE_HUB_SWIPE
-                Scenes.Gone -> Classifier.UNLOCK
-                Scenes.Shade -> Classifier.SHADE_DRAG
-                Overlays.NotificationsShade -> Classifier.NOTIFICATION_DRAG_DOWN
-                Scenes.QuickSettings,
-                Overlays.QuickSettingsShade,
-                Overlays.QuickActions -> Classifier.QUICK_SETTINGS
-                else -> null
+            when {
+                transition is TransitionState.Transition.ReplaceOverlay &&
+                    transition.isTransitioningBetween(
+                        Overlays.NotificationsShade,
+                        Overlays.QuickSettingsShade,
+                    ) -> Classifier.QS_SWIPE_SIDE
+                from == Scenes.QuickSettings &&
+                    (to == Scenes.Shade || to == Scenes.Lockscreen || to == Scenes.Gone) ->
+                    Classifier.QS_COLLAPSE
+                transition is TransitionState.Transition.ShowOrHideOverlay &&
+                    from == Overlays.QuickSettingsShade -> Classifier.QS_COLLAPSE
+                transition is TransitionState.Transition.ShowOrHideOverlay &&
+                    from == Overlays.NotificationsShade -> Classifier.SHADE_DRAG
+                from == Scenes.Shade && (to == Scenes.Lockscreen || to == Scenes.Gone) ->
+                    Classifier.SHADE_DRAG
+                else ->
+                    when (to) {
+                        Overlays.Bouncer -> Classifier.BOUNCER_SWIPE
+                        Scenes.Communal -> Classifier.GLANCEABLE_HUB_SWIPE
+                        Scenes.Gone -> Classifier.UNLOCK
+                        Scenes.Shade -> Classifier.SHADE_DRAG
+                        Overlays.NotificationsShade -> Classifier.NOTIFICATION_DRAG_DOWN
+                        Scenes.QuickSettings,
+                        Overlays.QuickSettingsShade,
+                        Overlays.QuickActions -> Classifier.QUICK_SETTINGS
+                        else -> null
+                    }
             }
 
         return interactionTypeOrNull?.let { interactionType ->
-            // It's important that the falsing system is always queried, even if no enforcement
-            // will occur. This helps build up the right signal in the system.
+            // Record the actual gesture classification after unlocking too, keeping falsing history consistent.
             val isFalseTouch = falsingInteractor.isFalseTouch(interactionType)
-
-            // Only enforce falsing if moving from the lockscreen scene to new content.
-            val fromLockscreenScene = currentScene == Scenes.Lockscreen
-
-            !fromLockscreenScene || !isFalseTouch
+            val fromLockscreen = transition.currentSceneWhenTransitionStarted == Scenes.Lockscreen
+            !fromLockscreen || !isFalseTouch
         } ?: true
     }
 

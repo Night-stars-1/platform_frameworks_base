@@ -3668,19 +3668,10 @@ public final class ActiveServices {
 
     private void updateServiceForegroundLocked(ProcessServiceRecord psr, boolean oomAdj) {
         boolean anyForeground = false;
-        boolean ocrDownloadForeground = false;
         int fgServiceTypes = 0;
         boolean hasTypeNone = false;
         for (int i = psr.numberOfRunningServices() - 1; i >= 0; i--) {
             ServiceRecord sr = psr.getRunningServiceAt(i);
-            if ((sr.isForeground() || sr.fgRequired)
-                    && AppBackgroundModeConfig.isOcrDownloadService(
-                            sr.appInfo.packageName, sr.serviceInfo.name,
-                            sr.appInfo.isSystemApp() || sr.appInfo.isUpdatedSystemApp(),
-                            sr.isForeground() ? sr.getForegroundServiceType()
-                                    : sr.serviceInfo.getForegroundServiceType())) {
-                ocrDownloadForeground = true;
-            }
             if (sr.isForeground() || sr.fgRequired) {
                 anyForeground = true;
                 fgServiceTypes |= sr.getForegroundServiceType();
@@ -3688,10 +3679,6 @@ public final class ActiveServices {
                     hasTypeNone = true;
                 }
             }
-        }
-        if (mAm.mAppBackgroundModeController != null) {
-            mAm.mAppBackgroundModeController.onOcrDownloadForegroundChanged(
-                    psr.mApp.getApplicationUid(), psr.mApp.getPid(), ocrDownloadForeground);
         }
         mAm.updateProcessForegroundLocked(psr.mApp, anyForeground,
                 fgServiceTypes, hasTypeNone, oomAdj);

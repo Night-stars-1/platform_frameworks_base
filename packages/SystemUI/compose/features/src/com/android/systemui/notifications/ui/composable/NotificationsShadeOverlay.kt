@@ -62,9 +62,14 @@ import com.android.systemui.scene.shared.model.Overlays
 import com.android.systemui.scene.ui.composable.LocalSceneContainerPreloadedResources
 import com.android.systemui.scene.ui.composable.Overlay
 import com.android.systemui.shade.ui.composable.ChipHighlightModel
+import com.android.systemui.shade.ui.composable.DualShadeNotificationRows
 import com.android.systemui.shade.ui.composable.OverlayShade
 import com.android.systemui.shade.ui.composable.OverlayShadeHeader
+import com.android.systemui.shade.ui.composable.dualShadeControlGesture
+import com.android.systemui.shade.ui.composable.dualShadePart
+import com.android.systemui.shade.ui.composable.rememberDualShadeScrollState
 import com.android.systemui.shade.ui.composable.shadePanelSwipe
+import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout
 import com.android.systemui.statusbar.notification.stack.ui.view.NotificationScrollView
 import dagger.Lazy
 import javax.inject.Inject
@@ -125,6 +130,11 @@ constructor(
         }
 
         val isFullWidth = LocalSceneContainerPreloadedResources.current.isFullWidthShade
+        val scrollState =
+            rememberDualShadeScrollState(
+                shadeSession,
+                com.android.systemui.Prefs.Key.DUAL_SHADE_NOTIFICATIONS_SCROLL,
+            )
 
         val targetBlurRadiusPx: Float by
             remember(layoutState) {
@@ -140,6 +150,7 @@ constructor(
             statusBarHeightPx = viewModel.statusBarHeightPx,
             enableTransparency = viewModel.isTransparencyEnabled,
             modifier = modifier.blur(with(LocalDensity.current) { animatedBlurRadiusPx.toDp() }),
+            panelTopSpacing = 8.dp,
             onScrimClicked = viewModel::onScrimClicked,
             onBackgroundPlaced = { bounds, _, _ -> viewModel.onShadeOverlayBoundsChanged(bounds) },
             header = {
@@ -160,6 +171,9 @@ constructor(
                 }
             },
         ) {
+            DualShadeNotificationRows(
+                stackScrollView.get().asView() as? NotificationStackScrollLayout
+            )
             val focusRequester = remember { FocusRequester() }
 
             LaunchedEffectWithLifecycle(focusRequester) {
@@ -180,13 +194,14 @@ constructor(
                 if (isFullWidth) {
                     Box(
                         Modifier.shadePanelSwipe(
-                            enabled = viewModel.isDualShade,
-                            blockVerticalScroll = true,
-                        ).padding(
-                            start = notificationStackPadding,
-                            end = notificationStackPadding,
-                            bottom = 8.dp,
-                        )
+                                enabled = viewModel.isDualShade,
+                                blockVerticalScroll = true,
+                            )
+                            .padding(
+                                start = notificationStackPadding,
+                                end = notificationStackPadding,
+                                bottom = 8.dp,
+                            )
                     ) {
                         with(lockscreenElements) {
                             LockscreenElement(
@@ -204,6 +219,7 @@ constructor(
                     shadeSession = shadeSession,
                     stackScrollView = stackScrollView,
                     viewModel = placeholderViewModel,
+                    contentScrollState = scrollState,
                     notificationRulesParentViewModel = notificationRulesParentViewModel,
                     jankMonitor = jankMonitor,
                     shouldPunchHoleBehindScrim = false,
@@ -220,15 +236,12 @@ constructor(
                                     viewModelFactory = viewModel.mediaViewModelFactory,
                                     presentationStyle = MediaPresentationStyle.Default,
                                     behavior = viewModel.mediaUiBehavior,
+                                    modifier =
+                                        Modifier.dualShadePart(rank = 0f, key = "media")
+                                            .dualShadeControlGesture(),
                                     onDismissed = viewModel::onMediaSwipeToDismiss,
                                     location = Media.Location.SHADE,
-                                    headerGestureModifier = {
-                                        Modifier.shadePanelSwipe(
-                                            enabled = viewModel.isDualShade,
-                                            diagonalOnly = true,
-                                            blockVerticalScroll = true,
-                                        )
-                                    },
+                                    headerGestureModifier = { Modifier.dualShadeControlGesture() },
                                 )
                             }
                         }

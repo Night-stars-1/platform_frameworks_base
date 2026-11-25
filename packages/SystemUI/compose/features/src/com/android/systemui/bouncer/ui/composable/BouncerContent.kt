@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -72,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -117,6 +119,7 @@ import com.android.compose.animation.scene.transitions
 import com.android.compose.modifiers.thenIf
 import com.android.compose.windowsizeclass.LocalWindowSizeClass
 import com.android.systemui.Flags
+import com.android.systemui.bouncer.shared.model.TabletPinPosition
 import com.android.systemui.bouncer.ui.viewmodel.BouncerMessageViewModel
 import com.android.systemui.bouncer.ui.viewmodel.BouncerOverlayContentViewModel
 import com.android.systemui.bouncer.ui.viewmodel.MessageViewModel
@@ -166,13 +169,17 @@ fun ContentScope.BouncerContentLayout(
                 .scale(scale)
                 .pointerInput(Unit) { detectTapGestures { viewModel.backgroundTap() } }
     ) {
-        when (layout) {
-            BouncerOverlayLayout.STANDARD_BOUNCER -> StandardLayout(viewModel = viewModel)
-            BouncerOverlayLayout.BESIDE_USER_SWITCHER ->
-                BesideUserSwitcherLayout(viewModel = viewModel)
-            BouncerOverlayLayout.BELOW_USER_SWITCHER ->
-                BelowUserSwitcherLayout(viewModel = viewModel)
-            BouncerOverlayLayout.SPLIT_BOUNCER -> SplitLayout(viewModel = viewModel)
+        if (usesTabletPinLayout(viewModel) && layout != BouncerOverlayLayout.SPLIT_BOUNCER) {
+            TabletPinLayout(viewModel)
+        } else {
+            when (layout) {
+                BouncerOverlayLayout.STANDARD_BOUNCER -> StandardLayout(viewModel = viewModel)
+                BouncerOverlayLayout.BESIDE_USER_SWITCHER ->
+                    BesideUserSwitcherLayout(viewModel = viewModel)
+                BouncerOverlayLayout.BELOW_USER_SWITCHER ->
+                    BelowUserSwitcherLayout(viewModel = viewModel)
+                BouncerOverlayLayout.SPLIT_BOUNCER -> SplitLayout(viewModel = viewModel)
+            }
         }
 
         Dialog(bouncerViewModel = viewModel, dialogFactory = dialogFactory)
@@ -482,48 +489,107 @@ private fun ContentScope.BesideUserSwitcherLayout(
             modifier = Modifier.fillMaxHeight().weight(1f).swappable(),
         )
 
-        FoldAware(
-            modifier = Modifier.weight(1f).swappable(inverted = true).testTag("FoldAware"),
+        SideBySideInput(
             viewModel = viewModel,
-            aboveFold = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier =
-                        Modifier.fillMaxWidth().thenIf(
-                            viewModel.authMethodViewModel is PasswordBouncerViewModel
-                        ) {
-                            Modifier.fillMaxHeight()
-                        },
-                ) {
-                    StatusMessage(viewModel = viewModel.message)
-                    OutputArea(
-                        viewModel = viewModel,
-                        modifier = Modifier.padding(top = 24.dp).sysuiResTag("bouncer_text_entry"),
-                    )
-                }
-            },
-            belowFold = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        InputArea(
-                            viewModel = viewModel,
-                            pinButtonRowVerticalSpacing = 12.dp,
-                            centerPatternDotsVertically = true,
-                            modifier = Modifier.padding(top = 24.dp).align(Alignment.BottomCenter),
-                        )
-                    }
+            modifier = Modifier.weight(1f).swappable(inverted = true),
+        )
+    }
+}
 
-                    ActionArea(
+@Composable
+private fun ContentScope.SideBySideInput(
+    viewModel: BouncerOverlayContentViewModel,
+    modifier: Modifier = Modifier,
+) {
+    FoldAware(
+        modifier = modifier.testTag("FoldAware"),
+        viewModel = viewModel,
+        aboveFold = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier =
+                    Modifier.fillMaxWidth().thenIf(
+                        viewModel.authMethodViewModel is PasswordBouncerViewModel
+                    ) {
+                        Modifier.fillMaxHeight()
+                    },
+            ) {
+                StatusMessage(viewModel = viewModel.message)
+                OutputArea(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(top = 24.dp).sysuiResTag("bouncer_text_entry"),
+                )
+            }
+        },
+        belowFold = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    InputArea(
                         viewModel = viewModel,
-                        modifier = Modifier.padding(top = 48.dp).testTag("ActionArea"),
+                        pinButtonRowVerticalSpacing = 12.dp,
+                        centerPatternDotsVertically = true,
+                        modifier = Modifier.padding(top = 24.dp).align(Alignment.BottomCenter),
                     )
                 }
-            },
-            useWeightedAboveFold = false,
+
+                ActionArea(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(top = 48.dp).testTag("ActionArea"),
+                )
+            }
+        },
+        useWeightedAboveFold = false,
+    )
+}
+
+@Composable
+internal fun usesTabletPinLayout(viewModel: BouncerOverlayContentViewModel): Boolean {
+    val pin = viewModel.authMethodViewModel as? PinBouncerViewModel
+    return LocalResources.current.configuration.smallestScreenWidthDp >= 600 &&
+        pin != null &&
+        !pin.isSimAreaVisible
+}
+
+@Composable
+private fun ContentScope.TabletPinLayout(viewModel: BouncerOverlayContentViewModel) {
+    val position by viewModel.tabletPinPosition.collectAsStateWithLifecycle()
+    val inputAlignment =
+        when (position) {
+            TabletPinPosition.LEFT -> AbsoluteAlignment.CenterLeft
+            TabletPinPosition.CENTER -> Alignment.Center
+            TabletPinPosition.RIGHT -> AbsoluteAlignment.CenterRight
+        }
+    val userAlignment =
+        if (position == TabletPinPosition.LEFT) {
+            AbsoluteAlignment.CenterRight
+        } else {
+            AbsoluteAlignment.CenterLeft
+        }
+    val isHeightExpanded =
+        LocalWindowSizeClass.current.isHeightAtLeastBreakpoint(
+            WindowSizeClass.HEIGHT_DP_EXPANDED_LOWER_BOUND
+        )
+    val padding =
+        if (isHeightExpanded) {
+            PaddingValues(vertical = 128.dp)
+        } else {
+            PaddingValues(top = 56.dp, bottom = 48.dp)
+        }
+    Box(Modifier.fillMaxSize().padding(padding).testTag("TabletPinLayout")) {
+        UserSwitcher(
+            viewModel = viewModel,
+            modifier =
+                Modifier.fillMaxHeight()
+                    .fillMaxWidth(if (position == TabletPinPosition.CENTER) 0.25f else 0.5f)
+                    .align(userAlignment),
+        )
+        SideBySideInput(
+            viewModel = viewModel,
+            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.5f).align(inputAlignment),
         )
     }
 }

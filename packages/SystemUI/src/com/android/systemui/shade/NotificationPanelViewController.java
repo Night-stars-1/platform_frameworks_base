@@ -799,8 +799,8 @@ public final class NotificationPanelViewController implements
         mDoubleTapToSleepObserver = new ContentObserver(handler) {
             @Override
             public void onChange(boolean selfChange) {
-                mDoubleTapToSleepEnabled = Settings.System.getInt(mContentResolver,
-                        Settings.System.DOUBLE_TAP_SLEEP_GESTURE,
+                mDoubleTapToSleepEnabled = Settings.Secure.getInt(mContentResolver,
+                        Settings.Secure.DOUBLE_TAP_TO_SLEEP,
                         mResources.getBoolean(com.android.internal.R.bool.
                                 config_dt2sGestureEnabledByDefault) ? 1 : 0) != 0;
             }
@@ -3680,8 +3680,8 @@ public final class NotificationPanelViewController implements
                 mStatusBarStateListener.onStateChanged(mStatusBarStateController.getState(), true);
             }
             mConfigurationController.addCallback(mConfigurationListener);
-            mContentResolver.registerContentObserver(Settings.System.getUriFor(
-                    Settings.System.DOUBLE_TAP_SLEEP_GESTURE), false,
+            mContentResolver.registerContentObserver(Settings.Secure.getUriFor(
+                    Settings.Secure.DOUBLE_TAP_TO_SLEEP), false,
                     mDoubleTapToSleepObserver);
             mDoubleTapToSleepObserver.onChange(true);
             // Theme might have changed between inflating this view and attaching it to the

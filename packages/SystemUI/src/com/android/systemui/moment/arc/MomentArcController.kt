@@ -43,6 +43,7 @@ constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val maxLifetimeRunnable = Runnable { hide() }
     private var overlayView: MomentArcView? = null
+    private var showingAllAppsOnly = false
     private val exitingViews = HashSet<MomentArcView>()
     private var lastWindowManagerErrorLogTime = Long.MIN_VALUE
     private var suppressedWindowManagerErrorCount = 0
@@ -66,11 +67,28 @@ constructor(
             .onFailure { Log.w(TAG, "Failed to observe launcher package changes", it) }
     }
 
-    fun show(isLeft: Boolean, initialTouchX: Float = -1f, initialTouchY: Float = -1f) {
-        hide()
-        if (!isMomentArcEnabled()) return
+    fun showAllApps() = show(isLeft = true, allAppsOnly = true)
 
-        val view = MomentArcView(context, isLeft)
+    fun onSettingsChanged() {
+        if (!isMomentEnabled() || (!showingAllAppsOnly && !isMomentArcEnabled())) {
+            hide(immediate = true)
+        }
+    }
+
+    fun show(
+        isLeft: Boolean,
+        initialTouchX: Float = -1f,
+        initialTouchY: Float = -1f,
+        allAppsOnly: Boolean = false,
+    ) {
+        hide()
+        fun enabled() = isMomentEnabled() && (allAppsOnly || isMomentArcEnabled())
+        if (!enabled()) {
+            Log.w(TAG, "Cannot show Moment UI: disabled, allAppsOnly=$allAppsOnly")
+            return
+        }
+
+        val view = MomentArcView(context, isLeft, startInAllApps = allAppsOnly)
         val user = userTracker.userHandle
         val innerTargets = getTargetSlots(INNER_RING_TARGETS, INNER_MAX_ICONS - 1)
         val outerTargets = getTargetSlots(OUTER_RING_TARGETS, OUTER_MAX_ICONS)
@@ -90,7 +108,7 @@ constructor(
         }
 
         view.setOnIconLaunchListener { index ->
-            if (!isMomentArcEnabled() || user != userTracker.userHandle) {
+            if (!enabled() || user != userTracker.userHandle) {
                 hide()
                 return@setOnIconLaunchListener
             }
@@ -139,7 +157,7 @@ constructor(
             }
         }
         view.setOnAppLaunchListener { target ->
-            if (overlayView === view && user == userTracker.userHandle && isMomentArcEnabled()) {
+            if (overlayView === view && user == userTracker.userHandle && enabled()) {
                 if (launch(target)) {
                     if (!view.animateAppLaunch {
                         if (overlayView === view) hide(immediate = true)
@@ -152,9 +170,11 @@ constructor(
             view.setInitialTouchPoint(initialTouchX, initialTouchY)
         }
         try {
-            windowManager.addView(view, MomentArcView.createLayoutParams())
+            windowManager.addView(view, MomentArcView.createLayoutParams(directInput = allAppsOnly))
             overlayView = view
-            mainHandler.postDelayed(maxLifetimeRunnable, MAX_LIFETIME_MS)
+            showingAllAppsOnly = allAppsOnly
+            if (allAppsOnly) Log.i(TAG, "Attached all-apps window for user=${user.identifier}")
+            if (!allAppsOnly) mainHandler.postDelayed(maxLifetimeRunnable, MAX_LIFETIME_MS)
         } catch (e: Exception) {
             logWindowManagerFailure("Failed to add MomentArc view", e)
         }
@@ -189,19 +209,21 @@ constructor(
         }
     }
 
-    fun isMomentArcEnabled(): Boolean {
-        val userId = userTracker.userId
-        return Settings.Secure.getIntForUser(
+    private fun isMomentEnabled(): Boolean =
+        Settings.Secure.getIntForUser(
             context.contentResolver,
             Settings.Secure.MOMENT_ENABLED,
             0,
-            userId,
-        ) != 0 &&
+            userTracker.userId,
+        ) != 0
+
+    fun isMomentArcEnabled(): Boolean {
+        return isMomentEnabled() &&
             Settings.Secure.getIntForUser(
                 context.contentResolver,
                 Settings.Secure.MOMENT_ARC_GESTURE_ENABLED,
                 1,
-                userId,
+                userTracker.userId,
             ) != 0
     }
 

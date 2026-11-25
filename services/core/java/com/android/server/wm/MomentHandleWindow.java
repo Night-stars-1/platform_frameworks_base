@@ -58,7 +58,7 @@ final class MomentHandleWindow {
     private static final float COMPACT_FLING_UNSTUCK_MIN_VELOCITY = 4000f;
     private static final float COMPACT_STASH_VELOCITY_THRESHOLD = 18000f;
     private static final int COMPACT_STASH_OFFSET_DP = 32;
-    private static final float COMPACT_MAGNET_STIFFNESS = SpringForce.STIFFNESS_MEDIUM;
+    private static final float COMPACT_MAGNET_STIFFNESS = MomentMotion.DEFAULT_SPATIAL.stiffness;
     private static final float COMPACT_CATCH_UP_STIFFNESS = 5000f;
     private static final float COMPACT_NO_BOUNCE = SpringForce.DAMPING_RATIO_NO_BOUNCY;
 
@@ -280,6 +280,7 @@ final class MomentHandleWindow {
         private float mCompactDragCenterX;
         private float mCompactDragCenterY;
         private final MomentCompactMotionRunner mCompactMotion;
+        private final MomentDragMotion mDragMotion;
         private VelocityTracker mCompactVelocityTracker;
         private float mCompactVelocityX;
         private float mCompactVelocityY;
@@ -326,6 +327,12 @@ final class MomentHandleWindow {
             mMaximumFlingVelocity = configuration.getScaledMaximumFlingVelocity();
             mVibrator = context.getSystemService(Vibrator.class);
             mCompactMotion = new MomentCompactMotionRunner(this::applyCompactMotion);
+            mDragMotion = new MomentDragMotion(getResources().getDisplayMetrics().density,
+                    (x, y) -> {
+                        if (mDestroyed || mCompact || mInteractionBlocked) return;
+                        applyInteractiveMomentBounds(mService.mMomentController.moveMomentTask(
+                                mTask, Math.round(x), Math.round(y)));
+                    });
             mHandleMenu = new MomentHandleMenuController(this,
                     () -> mService.mMomentController.expandMomentTaskAnimated(mTask.mTaskId),
                     () -> mService.mMomentController.closeMomentTask(mTask.mTaskId),
@@ -350,7 +357,7 @@ final class MomentHandleWindow {
         }
 
         void setMomentBounds(Rect bounds, boolean compact, boolean interactionBlocked) {
-            if (!mInteractionBlocked && interactionBlocked) {
+            if ((!mInteractionBlocked && interactionBlocked) || (!mCompact && compact)) {
                 cancelNonCompactGesture();
             }
             if ((mCompact && !compact) || (!mInteractionBlocked && interactionBlocked)) {
@@ -411,6 +418,7 @@ final class MomentHandleWindow {
                     mStartCenterX = mMomentBounds.centerX();
                     mStartCenterY = mMomentBounds.centerY();
                     mStartMomentBounds.set(mMomentBounds);
+                    mDragMotion.begin(mMomentBounds.exactCenterX(), mMomentBounds.exactCenterY());
                     mCloseTriggered = false;
                     mTopHandlePressed = false;
                     mDragging = false;
@@ -447,6 +455,8 @@ final class MomentHandleWindow {
                         mLastTapUpTime = 0;
                     }
                     mService.mMomentController.animateMomentHandlePress(mTask, true);
+                    obtainCompactVelocityTracker();
+                    addCompactVelocityMovement(event);
                     postDelayed(mLongPressRunnable, LONG_PRESS_TIMEOUT_MS);
                     return true;
                 case MotionEvent.ACTION_MOVE:
@@ -472,6 +482,7 @@ final class MomentHandleWindow {
                         return true;
                     }
                     final int pointerIndex = getActivePointerIndex(event);
+                    addCompactVelocityMovement(event);
                     final int dx = (int) event.getRawX(pointerIndex) - mDownRawX;
                     final int dy = (int) event.getRawY(pointerIndex) - mDownRawY;
                     mExceededTouchSlop |= Math.hypot(dx, dy) > mTouchSlop;
@@ -481,9 +492,7 @@ final class MomentHandleWindow {
                         removeCallbacks(mSingleTapRunnable);
                     }
                     if (mDragging) {
-                        final Rect draggedBounds = mService.mMomentController.moveMomentTask(mTask,
-                                mStartCenterX + dx, mStartCenterY + dy);
-                        applyInteractiveMomentBounds(draggedBounds);
+                        mDragMotion.track(mStartCenterX + dx, mStartCenterY + dy);
                     }
                     return true;
                 case MotionEvent.ACTION_POINTER_UP:
@@ -543,6 +552,10 @@ final class MomentHandleWindow {
                         resetResizeGesture();
                         return true;
                     }
+                    addCompactVelocityMovement(event);
+                    computeCompactVelocity();
+                    if (mDragging) mDragMotion.release(mCompactVelocityX, mCompactVelocityY);
+                    recycleCompactVelocityTracker();
                     if (!mDragging && !mExceededTouchSlop && isDoubleTap(event)) {
                         removeCallbacks(mSingleTapRunnable);
                         mLastTapUpTime = 0;
@@ -586,6 +599,8 @@ final class MomentHandleWindow {
                     }
                     mLastTapUpTime = 0;
                     mService.mMomentController.animateMomentHandlePress(mTask, false);
+                    mDragMotion.cancel();
+                    recycleCompactVelocityTracker();
                     mDragging = false;
                     mExceededTouchSlop = false;
                     return true;
@@ -748,6 +763,7 @@ final class MomentHandleWindow {
                 final float relativeDy = Math.abs(dy / mResizeStartVectorY);
                 mResizeUsingHorizontalAxis = relativeDx >= relativeDy;
                 mResizing = true;
+                mService.mMomentController.setMomentResizing(mTask, true);
             }
             final float pointerVectorX = event.getRawX(pointerIndex) - mResizeFixedX;
             final float pointerVectorY = event.getRawY(pointerIndex) - mResizeFixedY;
@@ -775,12 +791,14 @@ final class MomentHandleWindow {
         }
 
         private void resetResizeGesture() {
+            if (mResizing) mService.mMomentController.setMomentResizing(mTask, false);
             mResizeEdges = RESIZE_EDGE_NONE;
             mResizing = false;
             mLastTapUpTime = 0;
         }
 
         private void cancelNonCompactGesture() {
+            mDragMotion.cancel();
             removeCallbacks(mLongPressRunnable);
             mHandleSurfaces.animateBottomPress(false);
             mTopHandlePressed = false;
@@ -818,7 +836,7 @@ final class MomentHandleWindow {
                 mCompactMotion.springTo(dismissWindow.getTargetCenterX(),
                         dismissWindow.getTargetCenterY(), 1f, mCompactVelocityX,
                         mCompactVelocityY,
-                        COMPACT_MAGNET_STIFFNESS, COMPACT_NO_BOUNCE, null);
+                        COMPACT_MAGNET_STIFFNESS, MomentMotion.DEFAULT_SPATIAL.damping, null);
             } else if (mCompactMagnetized && !inMagneticTarget) {
                 mCompactMagnetized = false;
                 vibrate(VibrationEffect.EFFECT_TICK);

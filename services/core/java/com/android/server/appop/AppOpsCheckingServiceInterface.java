@@ -39,6 +39,13 @@ public interface AppOpsCheckingServiceInterface {
     @VisibleForTesting
     void writeState();
 
+    /** Reads a consistent snapshot of uwu policy operations for one user. */
+    android.os.Bundle getUwuAppPolicies(int userId);
+
+    /** Commits related operations and their migration marker together. */
+    void setUwuAppPolicies(int userId, String[] packages, int[] types, int[] policies,
+            int migrationFeature);
+
     /**
      * Tells the checking service to read its state from persistence. This is generally called
      * shortly after instantiation. If extra system services need to be guaranteed to be published

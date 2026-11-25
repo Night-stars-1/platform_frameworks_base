@@ -87,6 +87,27 @@ class HandleMenuAnimator(
         private const val HEADER_MENU_OPEN_CLOSE_DURATION: Long = 600
     }
 
+    private var tabletMotion: TabletHandleMenuMotion? = null
+
+    private fun tabletMotion(handleView: View): TabletHandleMenuMotion? {
+        val handle = handleView as? HandleImageButton ?: return null
+        if (!handle.usesTabletMenuMotion) return null
+        return tabletMotion
+            ?: TabletHandleMenuMotion(
+                    handleMenu,
+                    handle,
+                    renderMenu = { progress, bodyProgress ->
+                        renderHandleMenu(
+                            handle,
+                            progress,
+                            tablet = true,
+                            bodyProgress = bodyProgress,
+                        )
+                    },
+                )
+                .also { tabletMotion = it }
+    }
+
     private val animators: MutableList<Animator> = mutableListOf()
     private val argbEvaluator: ArgbEvaluator = ArgbEvaluator.getInstance()
     private var runningAnimation: AnimatorSet? = null
@@ -168,6 +189,14 @@ class HandleMenuAnimator(
      * appear.
      */
     fun animateCaptionHandleExpandToOpen(handleView: View) {
+        tabletMotion(handleView)?.let { motion ->
+            motion.animate(expand = true) {
+                appInfoPill
+                    .requireViewById<View>(R.id.collapse_menu_button)
+                    .sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED)
+            }
+            return
+        }
         if (DesktopExperienceFlags.ENABLE_DRAWING_APP_HANDLE.isTrue) {
 
             setupHandleAnimator(handleView, true /* expand */)
@@ -210,6 +239,10 @@ class HandleMenuAnimator(
      * @param after runs after the animation finishes.
      */
     fun animateCollapseIntoHandleClose(handleView: View, after: () -> Unit) {
+        tabletMotion(handleView)?.let { motion ->
+            motion.animate(expand = false, after = after)
+            return
+        }
         if (DesktopExperienceFlags.ENABLE_DRAWING_APP_HANDLE.isTrue) {
             setupHandleAnimator(handleView, false /* expand */)
         } else {
@@ -253,15 +286,6 @@ class HandleMenuAnimator(
                     duration = HANDLE_MENU_OPEN_CLOSE_DURATION
                     interpolator = EMPHASIZED
                 }
-        val widthDiff: Int = (handleMenuWidth - handleWidth).toInt()
-        val targetWidth: Float = handleWidth + widthDiff * WIDTH_SWAP_FRACTION
-        val swapScale: Float = targetWidth / handleMenuWidth
-        val targetHeight: Float = targetWidth / handleMenuWidth * appInfoPillHeight
-
-        // Calculating deltas
-        val handleWidthDelta: Float = targetWidth - handleWidth
-        val handleHeightDelta = targetHeight - handleHeight
-
         if (expand) {
             // Use alpha instead of toggling visibility during expansion to prevent extra relayout.
             handleMenu.alpha = 0f
@@ -276,37 +300,76 @@ class HandleMenuAnimator(
             } else {
                 handleMenu.isVisible = !showHandle
             }
-            if (showHandle) {
-                val handleAnimationProgress: Float = progress / WIDTH_SWAP_FRACTION
-                val heightIncrement = handleHeightDelta * handleAnimationProgress
-                val widthIncrement = handleWidthDelta * handleAnimationProgress
-                val scaleYGrowth: Float = (heightIncrement + handleHeight) / handleHeight
-                val scaleXGrowth: Float = (widthIncrement + handleWidth) / handleWidth
-                handleView.pivotY = windowDecorHeight / 2
-                handleView.pivotX = handleWidth / 2
-                handleView.scaleX = scaleXGrowth
-                handleView.scaleY = scaleYGrowth
-                handleView.translationY = heightIncrement / 2 * handleAnimationProgress
-            } else {
-                val menuAnimationProgress: Float =
-                    (progress - WIDTH_SWAP_FRACTION) / (1 - WIDTH_SWAP_FRACTION)
-                val oldCenterY =
-                    captionHeight / 2 + (handleHeight + handleHeightDelta * progress) / 2
-                val currentMenuScale = swapScale + (1 - swapScale) * menuAnimationProgress
-                val finalCenterY = currentMenuScale * appInfoPillHeight / 2 + marginMenuTop
-                val diff = oldCenterY - finalCenterY
-                handleMenu.translationY = diff * (1 - menuAnimationProgress)
-                handleMenu.pivotY = 0f
-                handleMenu.pivotX = handleMenu.width.toFloat() / 2
-                handleMenu.scaleX = currentMenuScale
-                handleMenu.scaleY = currentMenuScale
-
-                appInfoPill.children.forEach { it.alpha = progress }
-                appInfoPill.elevation = menuItemElevation * progress
-                animateRestOfTheMenu(menuAnimationProgress)
-            }
+            renderHandleMenu(handleView, progress)
         }
         animators += showMenuAnimation
+    }
+
+    /** Uses the native bar-to-menu handoff for both the bar and the joined tablet dots. */
+    private fun renderHandleMenu(
+        handleView: View,
+        progress: Float,
+        tablet: Boolean = false,
+        bodyProgress: Float? = null,
+    ) {
+        val startingWidth =
+            if (tablet) TabletHandleMenuMotion.LINE_WIDTH * context.resources.displayMetrics.density
+            else handleWidth
+        val startingHeight =
+            if (tablet)
+                TabletHandleMenuMotion.LINE_HEIGHT * context.resources.displayMetrics.density
+            else handleHeight
+        val widthDiff =
+            if (tablet) handleMenuWidth - startingWidth
+            else (handleMenuWidth - handleWidth).toInt().toFloat()
+        val targetWidth = startingWidth + widthDiff * WIDTH_SWAP_FRACTION
+        val swapScale = targetWidth / handleMenuWidth
+        val targetHeight = swapScale * appInfoPillHeight
+        val heightDelta = targetHeight - startingHeight
+        val showHandle = progress <= WIDTH_SWAP_FRACTION
+        if (tablet) {
+            handleView.visibility = if (showHandle) View.VISIBLE else View.INVISIBLE
+            handleMenu.alpha = if (showHandle) 0f else 1f
+        }
+        if (showHandle) {
+            val handleProgress = progress / WIDTH_SWAP_FRACTION
+            val heightIncrement = heightDelta * handleProgress
+            val widthIncrement = (targetWidth - startingWidth) * handleProgress
+            handleView.pivotY = if (tablet) handleView.height / 2f else windowDecorHeight / 2
+            handleView.pivotX = if (tablet) handleView.width / 2f else handleWidth / 2
+            handleView.scaleX = (startingWidth + widthIncrement) / startingWidth
+            handleView.scaleY = (startingHeight + heightIncrement) / startingHeight
+            handleView.translationY =
+                if (tablet) heightIncrement / 2 else heightIncrement / 2 * handleProgress
+            if (tablet) handleView.translationX = appInfoPill.left * handleProgress
+        } else {
+            val menuProgress = (progress - WIDTH_SWAP_FRACTION) / (1 - WIDTH_SWAP_FRACTION)
+            val currentMenuScale = swapScale + (1 - swapScale) * menuProgress
+            val oldCenterY = captionHeight / 2 + (startingHeight + heightDelta * progress) / 2
+            val finalCenterY = currentMenuScale * appInfoPillHeight / 2 + marginMenuTop
+            val diff =
+                if (tablet) {
+                    // Caption and menu origins are supplied by the native task/split positioning.
+                    // Windowless caption views do not expose their SurfaceControl offset via
+                    // getLocationOnScreen, so keep the handoff in menu-local coordinates.
+                    val handoffCenterY = captionHeight / 2 - marginMenuTop + heightDelta / 2
+                    handoffCenterY - (appInfoPill.top + appInfoPill.height / 2f) * swapScale
+                } else oldCenterY - finalCenterY
+            handleMenu.translationY = diff * (1 - menuProgress)
+            handleMenu.pivotY = 0f
+            handleMenu.pivotX =
+                if (tablet) appInfoPill.left + appInfoPill.width / 2f
+                else handleMenu.width.toFloat() / 2
+            handleMenu.scaleX = currentMenuScale
+            handleMenu.scaleY = currentMenuScale
+            appInfoPill.children.forEach { it.alpha = progress }
+            appInfoPill.elevation = menuItemElevation * progress
+            val actionsProgress =
+                bodyProgress?.let {
+                    ((it - WIDTH_SWAP_FRACTION) / (1 - WIDTH_SWAP_FRACTION)).coerceIn(0f, 1f)
+                } ?: menuProgress
+            animateRestOfTheMenu(actionsProgress)
+        }
     }
 
     private fun setupHeaderAnimator(headerView: View, expand: Boolean) {

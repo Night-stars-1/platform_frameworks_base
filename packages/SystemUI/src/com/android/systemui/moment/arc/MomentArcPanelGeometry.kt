@@ -58,16 +58,17 @@ internal data class MomentArcPanelGeometry(
             val gridBottom = max(gridTop, bounds.bottom - footer)
             val handleHeight = (bounds.width() * .015f).coerceIn(2 * density, 5 * density)
             val handleY = bounds.bottom + 9 * density
-            val handleWidth = bounds.width() / 2f
-            val handleTouchWidth = max(handleWidth, 100 * density).coerceAtMost(safe.width().toFloat())
+            val handleWidth = bounds.width() / 3f
+            val handleTouchWidth = max(bounds.width() / 2f, 100 * density)
+                .coerceAtMost(safe.width().toFloat())
             val handleTouchBounds = Rect(
                 (bounds.exactCenterX() - handleTouchWidth / 2f).roundToInt(),
-                gridBottom,
+                (handleY - 16 * density).roundToInt(),
                 (bounds.exactCenterX() + handleTouchWidth / 2f).roundToInt(),
-                min(safe.bottom, gridBottom + (48 * density).roundToInt()),
+                min(safe.bottom, (handleY + 16 * density).roundToInt()),
             )
             return MomentArcPanelGeometry(
-                bounds, scale, 16 * density,
+                bounds, scale, 28 * density * scale,
                 Rect(left, gridTop, bounds.right, gridBottom), launchBounds,
                 handleTouchBounds,
                 RectF(bounds.exactCenterX() - handleWidth / 2f, handleY - handleHeight / 2f,

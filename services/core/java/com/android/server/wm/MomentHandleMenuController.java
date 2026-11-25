@@ -23,9 +23,6 @@ import static com.android.server.wm.MomentGeometry.HANDLE_MENU_GAP_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_HEIGHT_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_WIDTH_DP;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -35,20 +32,12 @@ import android.util.Slog;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.animation.Interpolator;
-import android.view.animation.PathInterpolator;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 
-final class MomentHandleMenuController {
+import com.android.internal.dynamicanimation.animation.SpringAnimation;
 
-    private static final long EXPAND_DURATION_MS = 480;
-    private static final long COLLAPSE_DURATION_MS = 600;
-    private static final float ICON_START_PROGRESS = 0.19f;
-    private static final PathInterpolator MORPH_INTERPOLATOR =
-            new PathInterpolator(0.2f, 0f, 0f, 1f);
-    private static final Interpolator EXPAND_INTERPOLATOR = input ->
-            1f - MORPH_INTERPOLATOR.getInterpolation(1f - input);
+final class MomentHandleMenuController {
 
     private final ViewGroup mHost;
     private final Runnable mVisualChangedCallback;
@@ -57,9 +46,11 @@ final class MomentHandleMenuController {
     private final ImageButton mLightweightButton;
     private final boolean mAvailable;
 
-    private ValueAnimator mAnimator;
+    private SpringAnimation mAnimator;
+    private SpringAnimation mIconAnimator;
     private boolean mExpanded;
     private float mProgress;
+    private float mIconProgress;
 
     MomentHandleMenuController(ViewGroup host, Runnable fullscreenAction, Runnable closeAction,
             Runnable lightweightAction, Runnable visualChangedCallback) {
@@ -88,7 +79,7 @@ final class MomentHandleMenuController {
     }
 
     float getShapeProgress() {
-        return Math.min(1f, mProgress / ICON_START_PROGRESS);
+        return Math.max(0f, mProgress);
     }
 
     void toggle() {
@@ -136,48 +127,58 @@ final class MomentHandleMenuController {
     }
 
     private void animate(boolean expanded) {
-        cancelAnimation();
         mExpanded = expanded;
         if (expanded) {
             setButtonsVisible(true);
         }
         updateButtons();
-        final ValueAnimator animator = ValueAnimator.ofFloat(mProgress, expanded ? 1f : 0f);
-        mAnimator = animator;
-        final long duration = expanded ? EXPAND_DURATION_MS : COLLAPSE_DURATION_MS;
-        animator.setDuration(Math.round(duration * Math.abs((expanded ? 1f : 0f) - mProgress)));
-        animator.setInterpolator(expanded ? EXPAND_INTERPOLATOR : MORPH_INTERPOLATOR);
-        animator.addUpdateListener(animation -> {
-            mProgress = (float) animation.getAnimatedValue();
-            updateButtons();
-            notifyVisualChanged();
-        });
-        animator.addListener(new AnimatorListenerAdapter() {
-            private boolean mCancelled;
-
-            @Override
-            public void onAnimationCancel(Animator animation) {
-                mCancelled = true;
-            }
-
-            @Override
-            public void onAnimationEnd(Animator animation) {
+        final float target = expanded ? 1f : 0f;
+        if (mAnimator != null && mAnimator.isRunning()) {
+            mAnimator.animateToFinalPosition(target);
+        } else {
+            final SpringAnimation animator = MomentMotion.spring(mProgress, target, 0f,
+                    MomentMotion.DEFAULT_SPATIAL, 0.001f);
+            mAnimator = animator;
+            animator.addUpdateListener((animation, value, velocity) -> {
+                mProgress = value;
+                updateButtons();
+                notifyVisualChanged();
+            });
+            animator.addEndListener((animation, cancelled, value, velocity) -> {
                 if (mAnimator == animation) {
                     mAnimator = null;
                 }
-                if (!mCancelled && !expanded) {
+                if (!cancelled && !mExpanded) {
                     setButtonsVisible(false);
                 }
-            }
-        });
+            });
+            animator.start();
+        }
+        if (mIconAnimator != null && mIconAnimator.isRunning()) {
+            mIconAnimator.animateToFinalPosition(target);
+        } else {
+            final SpringAnimation icons = MomentMotion.spring(mIconProgress, target, 0f,
+                    MomentMotion.FAST_EFFECTS, 0.001f);
+            mIconAnimator = icons;
+            icons.addUpdateListener((animation, value, velocity) -> {
+                mIconProgress = MomentMotion.clamp(value);
+                updateButtons();
+            });
+            icons.addEndListener((animation, cancelled, value, velocity) -> {
+                if (mIconAnimator == animation) {
+                    mIconAnimator = null;
+                }
+            });
+            icons.start();
+        }
         mHost.requestLayout();
-        animator.start();
     }
 
     private void setExpandedImmediately(boolean expanded) {
         cancelAnimation();
         mExpanded = expanded;
         mProgress = expanded ? 1f : 0f;
+        mIconProgress = mProgress;
         setButtonsVisible(expanded);
         updateButtons();
         notifyVisualChanged();
@@ -185,16 +186,23 @@ final class MomentHandleMenuController {
     }
 
     private void cancelAnimation() {
-        final ValueAnimator animator = mAnimator;
+        final SpringAnimation animator = mAnimator;
         mAnimator = null;
         if (animator != null) {
             animator.cancel();
         }
+        final SpringAnimation icons = mIconAnimator;
+        mIconAnimator = null;
+        if (icons != null) {
+            icons.cancel();
+        }
     }
 
     private void updateButtons() {
-        final float iconProgress = Math.max(0f, Math.min(1f,
-                (mProgress - ICON_START_PROGRESS) / (1f - ICON_START_PROGRESS)));
+        // Effects have their own clock; visibility is additionally gated by the space actually
+        // available in the container so icons cannot appear outside the expanding handle.
+        final float iconProgress = Math.min(mIconProgress,
+                MomentMotion.clamp((mProgress - 0.35f) / 0.65f));
         mFullscreenButton.setAlpha(iconProgress);
         mCloseButton.setAlpha(iconProgress);
         mLightweightButton.setAlpha(iconProgress);

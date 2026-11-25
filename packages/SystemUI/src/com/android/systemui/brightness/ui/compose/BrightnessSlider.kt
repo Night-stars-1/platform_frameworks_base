@@ -543,29 +543,35 @@ fun BrightnessSliderContainer(
         }
     }
 
+    val isRestricted = restriction is PolicyRestriction.Restricted
+    // Raw style flow, observed directly so the slider always renders the currently persisted style
+    // (same pattern as InfiniteGridLayout / QuickQuickSettings).
+    val tileStyle by viewModel.tileStyleFlow.collectAsState()
+    val circular = tileStyle.isCircular
+
     // Use dragging instead of viewModel.showMirror so the color starts changing as soon as the
     // dragging state changes. If not, we may be waiting for the background to finish fading in
-    // when stopping dragging
+    // when stopping dragging.
+    //
+    // The circular style draws no background frame: the reference bar is a bare capsule, and the
+    // frame fading in and out on every drag was reported as an abnormal background flicker.
     val containerColor by
         animateColorAsState(
-            if (dragging && viewModel.supportsMirroring) {
+            if (!circular && dragging && viewModel.supportsMirroring) {
                 containerColors.mirrorColor
             } else {
                 containerColors.idleColor
             }
         )
 
-    val isRestricted = restriction is PolicyRestriction.Restricted
-    // Raw style flow, observed directly so the slider always renders the currently persisted style
-    // (same pattern as InfiniteGridLayout / QuickQuickSettings).
-    val tileStyle by viewModel.tileStyleFlow.collectAsState()
-    val circular = tileStyle.isCircular
     // The circular style has its own geometry (pill track, no thumb, icon inside the fill).
     val sliderDimensions = if (circular) BrightnessSliderDimensions.Circular else dimensions
     Box(
         modifier =
             modifier
-                .padding(vertical = { sliderDimensions.verticalPadding.roundToPx() })
+                .thenIf(!circular) {
+                    Modifier.padding(vertical = { sliderDimensions.verticalPadding.roundToPx() })
+                }
                 .fillMaxWidth()
                 .sysuiResTag("brightness_slider")
     ) {

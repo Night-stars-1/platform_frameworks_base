@@ -6,8 +6,14 @@ package com.android.systemui.moment.arc
 
 import android.graphics.Matrix
 import android.graphics.RectF
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
@@ -46,7 +52,6 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
@@ -54,7 +59,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,9 +78,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 internal fun MomentArcAllAppsPanel(
     state: MomentArcUiState, onLaunch: (MomentArcTarget) -> Unit, onSelection: () -> Unit,
-    onDismiss: () -> Unit,
+    onBack: () -> Unit, onDismiss: () -> Unit,
 ) {
     val geometry = state.panelGeometry ?: return
     PlatformTheme {
@@ -112,12 +120,29 @@ internal fun MomentArcAllAppsPanel(
             layout(constraints.maxWidth, constraints.maxHeight) { content.place(bounds.left, bounds.top) }
         }
         if (state.panelVisible) {
-            val description = stringResource(R.string.moment_arc_close_all_apps)
+            val description = stringResource(R.string.moment_arc_back_all_apps)
+            val closeDescription = stringResource(R.string.moment_arc_close_all_apps)
+            val interactionSource = remember { MutableInteractionSource() }
+            val pressed by interactionSource.collectIsPressedAsState()
+            val widthScale by animateFloatAsState(
+                targetValue = if (pressed) 1.15f else 1f,
+                animationSpec = spring(dampingRatio = .6f, stiffness = 800f),
+                label = "MomentArcHandlePress",
+            )
+            val handleColor = colorResource(android.R.color.system_accent1_100)
             Layout(
                 modifier = Modifier.fillMaxSize(),
                 content = {
                     Box(Modifier.semantics { contentDescription = description }
-                        .clickable(enabled = state.panelInteractive, onClick = onDismiss)
+                        .combinedClickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            enabled = state.panelInteractive,
+                            role = Role.Button,
+                            onClick = onBack,
+                            onLongClickLabel = closeDescription,
+                            onLongClick = onDismiss,
+                        )
                         .graphicsLayer {
                             alpha = state.panelContentAlpha * state.panelExitAlpha *
                                 ((state.panelProgress - .75f) / .25f).coerceIn(0f, 1f)
@@ -125,11 +150,15 @@ internal fun MomentArcAllAppsPanel(
                         Canvas(Modifier.fillMaxSize()) {
                             val visual = geometry.handleVisualBounds
                             val touch = geometry.handleTouchBounds
+                            val width = visual.width() * widthScale
+                            val height = visual.height() *
+                                (1f + .65f * ((widthScale - 1f) / .15f).coerceIn(0f, 1.2f))
                             drawRoundRect(
-                                Color.White.copy(alpha = .85f),
-                                topLeft = Offset(visual.left - touch.left, visual.top - touch.top),
-                                size = Size(visual.width(), visual.height()),
-                                cornerRadius = CornerRadius(visual.height() / 2f),
+                                handleColor,
+                                topLeft = Offset(visual.centerX() - width / 2f - touch.left,
+                                    visual.centerY() - height / 2f - touch.top),
+                                size = Size(width, height),
+                                cornerRadius = CornerRadius(height / 2f),
                             )
                         }
                     }

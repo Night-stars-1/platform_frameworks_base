@@ -374,6 +374,7 @@ import com.android.server.pm.UserManagerInternal;
 import com.android.server.policy.WindowManagerPolicy;
 import com.android.server.policy.WindowManagerPolicy.ScreenOffListener;
 import com.android.server.power.ShutdownThread;
+import com.android.server.statusbar.StatusBarManagerInternal;
 import com.android.server.utils.PriorityDump;
 import com.android.window.flags.Flags;
 
@@ -850,6 +851,8 @@ public class WindowManagerService extends IWindowManager.Stub
                 Settings.Secure.ACCESSIBILITY_MAGNIFICATION_MAGNIFY_NAV_AND_IME);
         private final Uri mMomentEnabledUri =
                 Settings.Secure.getUriFor(Settings.Secure.MOMENT_ENABLED);
+        private final Uri mMomentFixedAspectRatioUri =
+                Settings.Secure.getUriFor(Settings.Secure.MOMENT_FIXED_ASPECT_RATIO);
         private final Uri mPolicyControlUri =
                 Settings.Global.getUriFor(Settings.Global.POLICY_CONTROL);
         private final Uri mForceDesktopModeOnExternalDisplaysUri = Settings.Global.getUriFor(
@@ -889,6 +892,8 @@ public class WindowManagerService extends IWindowManager.Stub
             resolver.registerContentObserver(mMagnifyImeEnabledUri, false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(mMomentEnabledUri, false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(mMomentFixedAspectRatioUri, false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(mPolicyControlUri, false, this, UserHandle.USER_ALL);
             if (DesktopModeHelper.isDesktopExperienceDevOptionSupported(mContext)) {
@@ -960,6 +965,11 @@ public class WindowManagerService extends IWindowManager.Stub
             }
 
             if (mMomentEnabledUri.equals(uri)) {
+                updateMomentEnabled();
+                return;
+            }
+
+            if (mMomentFixedAspectRatioUri.equals(uri)) {
                 updateMomentEnabled();
                 return;
             }
@@ -1129,6 +1139,9 @@ public class WindowManagerService extends IWindowManager.Stub
                     mContext.getContentResolver(), Settings.Secure.MOMENT_ENABLED, 0,
                     mCurrentUserId) != 0;
             mMomentController.setEnabledFromSettings(enabled);
+            mMomentController.setFixedAspectRatioFromSettings(Settings.Secure.getIntForUser(
+                    mContext.getContentResolver(), Settings.Secure.MOMENT_FIXED_ASPECT_RATIO, 0,
+                    mCurrentUserId) != 0);
         }
     }
 
@@ -7172,6 +7185,7 @@ public class WindowManagerService extends IWindowManager.Stub
         }
         try {
             final boolean isHome;
+            final int displayId;
             synchronized (mGlobalLock) {
                 final Task task = mRoot.anyTaskForId(taskId);
                 if (task == null) {
@@ -7181,13 +7195,20 @@ public class WindowManagerService extends IWindowManager.Stub
                     return false;
                 }
                 isHome = task.isActivityTypeHome();
+                displayId = task.getDisplayId();
             }
             if (isHome) {
-                final Intent intent = new Intent(Intent.ACTION_MAIN)
-                        .setClassName("org.uwuaosp.settingsext",
-                                "org.uwuaosp.settingsext.moment.MomentAllAppsActivity");
-                mMomentController.startActivityInMoment(intent, userId);
-                return true;
+                final StatusBarManagerInternal statusBar =
+                        LocalServices.getService(StatusBarManagerInternal.class);
+                if (statusBar == null) {
+                    Slog.w("MomentNavHandle", "Status bar service is unavailable");
+                    return false;
+                }
+                final boolean dispatched = statusBar.showMomentAllApps(displayId, userId);
+                if (!dispatched) {
+                    Slog.w("MomentNavHandle", "Cannot show Moment apps: SystemUI is not connected");
+                }
+                return dispatched;
             }
             mMomentController.convertTaskToMoment(taskId);
             return true;

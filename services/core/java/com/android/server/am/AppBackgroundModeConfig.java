@@ -142,16 +142,6 @@ final class AppBackgroundModeConfig {
         return enabled && (mode == MODE_TOMBSTONE || mode == MODE_FULL || mode == MODE_AUTO);
     }
 
-    /** Only the system OCR downloader may borrow Full mode while doing data sync. */
-    @VisibleForTesting
-    static boolean isOcrDownloadService(String packageName, String className,
-            boolean systemApp, int foregroundServiceType) {
-        return systemApp
-                && "org.uwuaosp.aicore".equals(packageName)
-                && "org.uwuaosp.aicore.ocr.OcrService".equals(className)
-                && (foregroundServiceType & ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0;
-    }
-
     @VisibleForTesting
     static int detectCgroupLayout(@Nullable String mountInfo) {
         if (mountInfo == null || mountInfo.isBlank()) {

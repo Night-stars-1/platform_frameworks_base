@@ -44,6 +44,7 @@ class PackageAppOpPersistence : BaseAppOpPersistence() {
 
     private fun BinaryXmlPullParser.parsePackageAppOps(state: MutableAccessState, userId: Int) {
         val userState = state.mutateUserState(userId, WriteMode.NONE)!!
+        userState.setUwuPolicyMigrationFlags(getAttributeInt(null, "uwu-policy-migrations", 0))
         val packageAppOpModes = userState.mutatePackageAppOpModes()
         forEachTag {
             when (tagName) {
@@ -68,11 +69,18 @@ class PackageAppOpPersistence : BaseAppOpPersistence() {
     }
 
     override fun BinaryXmlSerializer.serializeUserState(state: AccessState, userId: Int) {
-        serializePackageAppOps(state.userStates[userId]!!.packageAppOpModes)
+        serializePackageAppOps(
+            state.userStates[userId]!!.packageAppOpModes,
+            state.userStates[userId]!!.uwuPolicyMigrationFlags,
+        )
     }
 
-    private fun BinaryXmlSerializer.serializePackageAppOps(packageAppOpModes: PackageAppOpModes) {
+    private fun BinaryXmlSerializer.serializePackageAppOps(
+        packageAppOpModes: PackageAppOpModes,
+        migrationFlags: Int,
+    ) {
         tag(TAG_PACKAGE_APP_OPS) {
+            attributeInt(null, "uwu-policy-migrations", migrationFlags)
             packageAppOpModes.forEachIndexed { _, packageName, appOpModes ->
                 serializePackage(packageName, appOpModes)
             }

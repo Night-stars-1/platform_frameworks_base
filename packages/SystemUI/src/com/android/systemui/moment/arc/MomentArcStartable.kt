@@ -13,12 +13,14 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.UserHandle
 import android.provider.Settings
+import android.util.Log
 import com.android.systemui.CoreStartable
 import com.android.systemui.broadcast.BroadcastDispatcher
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Main
 import com.android.systemui.keyguard.WakefulnessLifecycle
 import com.android.systemui.settings.UserTracker
+import com.android.systemui.statusbar.CommandQueue
 import java.util.concurrent.Executor
 import javax.inject.Inject
 
@@ -29,15 +31,28 @@ constructor(
     private val context: Context,
     private val broadcastDispatcher: BroadcastDispatcher,
     private val controller: MomentArcController,
+    private val commandQueue: CommandQueue,
     private val userTracker: UserTracker,
     private val wakefulnessLifecycle: WakefulnessLifecycle,
     @Main private val mainExecutor: Executor,
     @Main private val mainHandler: Handler,
 ) : CoreStartable {
+    private val commandCallbacks = object : CommandQueue.Callbacks {
+        override fun showMomentAllApps(displayId: Int, userId: Int) {
+            if (userId != userTracker.userId || displayId != context.displayId) {
+                Log.w("MomentArc", "Ignoring apps request for display=$displayId user=$userId; " +
+                    "current display=${context.displayId} user=${userTracker.userId}")
+                return
+            }
+            Log.i("MomentArc", "Received all-apps command display=$displayId user=$userId")
+            controller.showAllApps()
+        }
+    }
+
     private val settingsObserver =
         object : ContentObserver(mainHandler) {
             override fun onChange(selfChange: Boolean) {
-                if (!controller.isMomentArcEnabled()) controller.hide(immediate = true)
+                controller.onSettingsChanged()
             }
         }
 
@@ -83,6 +98,7 @@ constructor(
         }
 
     override fun start() {
+        commandQueue.addCallback(commandCallbacks)
         broadcastDispatcher.registerReceiver(
             gestureReceiver,
             IntentFilter().apply {

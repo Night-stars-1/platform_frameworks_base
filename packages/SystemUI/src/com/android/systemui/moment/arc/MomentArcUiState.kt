@@ -111,11 +111,14 @@ internal class MomentArcUiState {
         return selection
     }
 
-    fun openAllApps() {
+    fun openAllApps(fromHandle: Boolean = false) {
         if (exiting || allAppsRequested || panelGeometry == null) return
         introJob?.cancel()
         selectionJob?.cancel()
-        if (panelProgress == 0f && !continuousGesture) {
+        if (fromHandle && panelProgress == 0f) {
+            panelSource = RectF(checkNotNull(panelGeometry).handleVisualBounds)
+            backdropAlpha = 128
+        } else if (panelProgress == 0f && !continuousGesture) {
             val icon = icons.getOrNull(MomentArcGeometry.INNER_COUNT - 1) ?: return
             val cx = icon.left + icon.width / 2f + icon.translationX
             val cy = icon.top + icon.height / 2f + icon.translationY

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
@@ -72,6 +73,7 @@ fun ContentScope.OverlayShade(
     enableTransparency: Boolean,
     onScrimClicked: () -> Unit,
     modifier: Modifier = Modifier,
+    panelTopSpacing: Dp = 0.dp,
     onBackgroundPlaced: (bounds: Rect, topCornerRadius: Float, bottomCornerRadius: Float) -> Unit =
         { _, _, _ ->
         },
@@ -91,75 +93,91 @@ fun ContentScope.OverlayShade(
     Box(modifier) {
         OverlayScrim(showBackgroundColor = enableTransparency, onClicked = onScrimClicked)
 
-        Box(Modifier.element(slidingContentElement)) {
+        Box {
             Box(
                 modifier =
                     Modifier.fillMaxSize()
-                        .panelContainerPadding(isFullWidth, alignmentOnWideScreens, statusBarHeightPx),
+                        .panelContainerPadding(
+                            isFullWidth,
+                            alignmentOnWideScreens,
+                            statusBarHeightPx,
+                            panelTopSpacing,
+                        ),
                 contentAlignment = panelAlignment,
             ) {
-                Panel(
-                    enableTransparency = enableTransparency,
-                    spec = panelSpec,
-                    modifier =
-                        Modifier.overscroll(verticalOverscrollEffect)
-                            .element(panelElement)
-                            .thenIf(TileRevealFlag.isEnabled) {
-                                Modifier.motionDriver(
-                                    contentScope = this@OverlayShade,
-                                    label = "OverlayShade",
-                                )
-                            }
-                            .width(Dimensions.PanelWidth)
-                            // TODO(440566878): Investigate if this can be optimized by replacing with
-                            // onLayoutRectChanged.
-                            .onPlaced { coordinates ->
-                                val bounds = coordinates.boundsInWindow()
-                                val isTopRounded = panelSpec.isFloating
-                                val bottomCornerRadius: Float =
-                                    if (isTopRounded) {
-                                        min(panelCornerRadiusPx, bounds.height / 2)
-                                    } else {
-                                        min(panelCornerRadiusPx, bounds.height)
-                                    }
-                                val topCornerRadius = if (isTopRounded) bottomCornerRadius else 0f
-                                onBackgroundPlaced(bounds, topCornerRadius, bottomCornerRadius)
-                            },
-                    header = header.takeIf { isFullWidth },
-                    content = {
-                        Box(
-                            Modifier
-                                // Prevent this element from resizing during the container reveal
-                                // animation. The parent clips the content, so remeasuring the
-                                // children (especially text) on every frame is unnecessary and
-                                // can cause performance issues (jank).
-                                .approachLayout(
-                                    isMeasurementApproachInProgress = { layoutState.isTransitioning() }
-                                ) { measurable, constraints ->
-                                    if (layoutState.currentTransition == null) {
-                                        return@approachLayout measurable.measure(constraints).run {
-                                            layout(width, height) { place(0, 0) }
+                Box(Modifier.element(slidingContentElement)) {
+                    Panel(
+                        enableTransparency = enableTransparency,
+                        spec = panelSpec,
+                        modifier =
+                            Modifier.overscroll(verticalOverscrollEffect)
+                                .element(panelElement)
+                                .thenIf(TileRevealFlag.isEnabled) {
+                                    Modifier.motionDriver(
+                                        contentScope = this@OverlayShade,
+                                        label = "OverlayShade",
+                                    )
+                                }
+                                .width(Dimensions.PanelWidth)
+                                // TODO(440566878): Investigate if this can be optimized by
+                                // replacing with
+                                // onLayoutRectChanged.
+                                .onPlaced { coordinates ->
+                                    val bounds = coordinates.boundsInWindow()
+                                    val isTopRounded = panelSpec.isFloating
+                                    val bottomCornerRadius: Float =
+                                        if (isTopRounded) {
+                                            min(panelCornerRadiusPx, bounds.height / 2)
+                                        } else {
+                                            min(panelCornerRadiusPx, bounds.height)
+                                        }
+                                    val topCornerRadius =
+                                        if (isTopRounded) bottomCornerRadius else 0f
+                                    onBackgroundPlaced(bounds, topCornerRadius, bottomCornerRadius)
+                                },
+                        header = header.takeIf { isFullWidth },
+                        content = {
+                            Box(
+                                Modifier
+                                    // Prevent this element from resizing during the container
+                                    // reveal
+                                    // animation. The parent clips the content, so remeasuring the
+                                    // children (especially text) on every frame is unnecessary and
+                                    // can cause performance issues (jank).
+                                    .approachLayout(
+                                        isMeasurementApproachInProgress = {
+                                            layoutState.isTransitioning()
+                                        }
+                                    ) { measurable, constraints ->
+                                        if (layoutState.currentTransition == null) {
+                                            return@approachLayout measurable
+                                                .measure(constraints)
+                                                .run { layout(width, height) { place(0, 0) } }
+                                        }
+
+                                        // Make sure that this layout node has the same size than
+                                        // when we
+                                        // are at rest.
+                                        val widthAtRest = lookaheadSize.width
+                                        val fixedWidthConstraints =
+                                            constraints.copy(
+                                                minWidth = widthAtRest,
+                                                maxWidth = widthAtRest,
+                                            )
+                                        measurable.measure(fixedWidthConstraints).run {
+                                            layout(width, height) { place(IntOffset.Zero) }
                                         }
                                     }
-
-                                    // Make sure that this layout node has the same size than when we
-                                    // are at rest.
-                                    val widthAtRest = lookaheadSize.width
-                                    val fixedWidthConstraints =
-                                        constraints.copy(minWidth = widthAtRest, maxWidth = widthAtRest)
-                                    measurable.measure(fixedWidthConstraints).run {
-                                        layout(width, height) { place(IntOffset.Zero) }
-                                    }
-                                }
-                        ) {
-                            content()
-                        }
-                    },
-                )
+                            ) {
+                                DualShadeMotionContent { content() }
+                            }
+                        },
+                    )
+                }
             }
 
             if (!isFullWidth) {
-                header()
+                Box(Modifier.element(OverlayShade.Elements.Header)) { header() }
             }
         }
     }
@@ -196,6 +214,7 @@ private fun Modifier.panelContainerPadding(
     isFullWidthPanel: Boolean,
     alignment: Alignment.Horizontal,
     statusBarHeightPx: Int,
+    topSpacing: Dp,
 ): Modifier {
     if (isFullWidthPanel) {
         return this
@@ -211,15 +230,16 @@ private fun Modifier.panelContainerPadding(
     val paddings = PaddingValues(start = startPadding, end = endPadding)
     val layoutDirection = LocalLayoutDirection.current
     return windowInsetsPadding(
-        WindowInsets.safeDrawing
-            .union(WindowInsets(top = statusBarHeightPx))
-            .union(
-                WindowInsets(
-                    left = paddings.calculateLeftPadding(layoutDirection),
-                    right = paddings.calculateRightPadding(layoutDirection),
+            WindowInsets.safeDrawing
+                .union(WindowInsets(top = statusBarHeightPx))
+                .union(
+                    WindowInsets(
+                        left = paddings.calculateLeftPadding(layoutDirection),
+                        right = paddings.calculateRightPadding(layoutDirection),
+                    )
                 )
-            )
-    )
+        )
+        .padding(top = topSpacing)
 }
 
 object OverlayShade {
@@ -227,6 +247,7 @@ object OverlayShade {
         val Scrim = ElementKey("OverlayShadeScrim", contentPicker = LowestZIndexContentPicker)
         val NotificationsSlidingContent = ElementKey("NotificationsShadeSlidingContent")
         val QuickSettingsSlidingContent = ElementKey("QuickSettingsShadeSlidingContent")
+        val Header = ElementKey("DualShadeHeader")
     }
 
     object Colors {

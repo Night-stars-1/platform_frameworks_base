@@ -60,12 +60,12 @@ constructor(
     val previewAlpha = if (previewInteractor.shouldHighlightSelectedAffordance) DIM_ALPHA else 1.0f
 
     val shouldHideSmartspace: Flow<Boolean> =
-        combine(previewClockSize, clockInteractor.currentClockId) { size, clockId ->
+        combine(previewClockSize, clockInteractor.currentClock) { size, clock ->
+                val hasCustomWeatherDataDisplay =
+                    clock?.largeClock?.config?.hasCustomWeatherDataDisplay == true ||
+                        clock?.config?.id == "DIGITAL_CLOCK_WEATHER"
                 when (size) {
-                    // TODO (b/284122375) This is temporary. We should use clockController
-                    //      .largeClock.config.hasCustomWeatherDataDisplay instead, but
-                    //      ClockRegistry.createCurrentClock is not reliable.
-                    ClockSizeSetting.DYNAMIC -> clockId == "DIGITAL_CLOCK_WEATHER"
+                    ClockSizeSetting.DYNAMIC -> hasCustomWeatherDataDisplay
                     ClockSizeSetting.SMALL -> false
                 }
             }

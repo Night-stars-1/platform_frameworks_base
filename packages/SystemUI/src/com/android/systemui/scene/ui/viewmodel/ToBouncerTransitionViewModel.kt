@@ -28,6 +28,11 @@ private const val BOUNCER_CONTENTS_PASSIVE_AUTH_DELAY = 500
 class ToBouncerTransitionViewModel
 @AssistedInject
 constructor(private val bouncerInteractor: BouncerInteractor) {
+    /** Keep the initiating touch region stable throughout the bouncer transition. */
+    fun recordTabletPinGesture(x: Float, width: Float) {
+        bouncerInteractor.recordTabletPinGesture(x, width)
+    }
+
     /**
      * Call this method to determine if Bouncer contents should delay showing on initial transition
      * to the bouncer. We have this delay to give an opportunity for passive authentication methods

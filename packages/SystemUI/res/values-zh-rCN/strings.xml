@@ -1896,6 +1896,7 @@
     <string name="ace_attribution_thumbs_down_button_accessibility_description" msgid="5471283747650437662">"“不喜欢”反馈按钮"</string>
     <string name="moment_arc_all_apps_title">全部应用</string>
     <string name="moment_arc_apps_section">MomentArc</string>
+    <string name="moment_arc_back_all_apps">返回</string>
     <string name="moment_arc_launch_failed">无法打开此应用</string>
     <string name="moment_arc_apps_load_failed">无法加载应用，点按重试</string>
     <string name="moment_arc_no_apps">没有可用的应用</string>

@@ -124,8 +124,8 @@ private constructor(
     private val pillTopMargin: Int =
         loadDimensionPixelSize(R.dimen.desktop_mode_handle_menu_pill_spacing_margin)
     private val menuWidth = loadDimensionPixelSize(R.dimen.desktop_mode_handle_menu_width)
-    private val menuHeight = getHandleMenuHeight()
     private val marginMenuTop = loadDimensionPixelSize(R.dimen.desktop_mode_handle_menu_margin_top)
+    private val menuHeight = getHandleMenuHeight()
     private val marginMenuPadding =
         loadDimensionPixelSize(R.dimen.desktop_mode_handle_menu_padding_left_bottom_right)
 

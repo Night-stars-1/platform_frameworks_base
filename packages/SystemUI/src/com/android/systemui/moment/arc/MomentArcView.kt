@@ -26,7 +26,11 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.android.systemui.compose.ComposeInitializer
 
 /** Window/input host only; the backdrop and every icon are drawn by Compose. */
-class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout(context) {
+class MomentArcView(
+    context: Context,
+    private val isLeft: Boolean,
+    private val startInAllApps: Boolean = false,
+) : FrameLayout(context) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val vibrator = context.getSystemService(Vibrator::class.java)
     private var hasAnimated = false
@@ -63,7 +67,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
     private val icons get() = uiState.icons
     private var geometryReady = false
     private val composeView = ComposeView(context)
-    var hasDirectInput = false
+    var hasDirectInput = startInAllApps
         private set
     private var appsLoader: (suspend () -> MomentArcApps)? = null
     private var appLaunchListener: ((MomentArcTarget) -> Unit)? = null
@@ -80,6 +84,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
                 uiState,
                 loadApps = { checkNotNull(appsLoader).invoke() },
                 onLaunch = { appLaunchListener?.invoke(it) },
+                onBack = ::handleBack,
                 onDismiss = { if (!uiState.launchingApp) dismissListener?.invoke() },
                 directInput = { hasDirectInput },
                 onArcTouch = ::dispatchTouchCoordinates,
@@ -98,6 +103,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ComposeInitializer.onAttachedToWindow(this)
+        if (startInAllApps) registerBackHandling()
     }
 
     fun setOnIconLaunchListener(listener: (Int) -> Unit) { iconLaunchListener = listener }
@@ -124,25 +130,37 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
             hasDirectInput = true
             hasInitialTouchPoint = false
             pendingTouchCoordinates.clear()
-            isFocusableInTouchMode = true
-            requestFocus()
-            backDispatcher = findOnBackInvokedDispatcher()
-            backDispatcher?.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCallback)
+            registerBackHandling()
         }
         cancelMoreHold()
         if (continueGesture) {
             gestureVisitedPanel = uiState.panelGeometry?.bounds?.contains(x.toInt(), y.toInt()) == true
             uiState.startContinuousGesture(x, y)
         }
-        uiState.openAllApps()
+        uiState.openAllApps(fromHandle = startInAllApps)
         allAppsOpenedListener?.invoke()
         return true
     }
 
     val acceptsGestureBroadcast get() = !hasDirectInput || uiState.continuousGesture
 
+    private fun registerBackHandling() {
+        isFocusableInTouchMode = true
+        requestFocus()
+        if (backDispatcher == null) {
+            backDispatcher = findOnBackInvokedDispatcher()
+            backDispatcher?.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCallback,
+            )
+        }
+    }
+
     private fun handleBack() {
         if (isExiting || uiState.launchingApp) return
+        if (startInAllApps) {
+            dismissListener?.invoke()
+            return
+        }
         if (uiState.allAppsRequested) {
             cancelMoreHold()
             resetTouchState()
@@ -181,6 +199,9 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
             resources.displayMetrics.density,
             metrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()),
         )
+        // Direct entry is not a corner gesture. Request the panel before Compose's first
+        // measurement; never rely on a later input broadcast or mutate WM flags in onLayout.
+        if (startInAllApps && !hasAnimated) uiState.openAllApps(fromHandle = true)
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
@@ -191,6 +212,10 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
         if (!hasAnimated) {
             uiState.ready = true
             hasAnimated = true
+            if (startInAllApps) {
+                allAppsOpenedListener?.invoke()
+                Log.i("MomentArc", "All-apps panel laid out: ${uiState.panelGeometry?.bounds}")
+            }
         }
         while (pendingTouchCoordinates.isNotEmpty()) {
             pendingTouchCoordinates.removeFirst().let {
@@ -391,7 +416,7 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
         private const val MORE_INDEX = MomentArcGeometry.INNER_COUNT - 1
         private const val MORE_HOLD_MS = 180L
 
-        fun createLayoutParams() =
+        fun createLayoutParams(directInput: Boolean = false) =
             WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -405,6 +430,10 @@ class MomentArcView(context: Context, private val isLeft: Boolean) : FrameLayout
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT,
             ).apply {
+                if (directInput) {
+                    flags = flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
+                }
                 title = "MomentArc"
                 gravity = Gravity.TOP or Gravity.START
                 fitInsetsTypes = 0

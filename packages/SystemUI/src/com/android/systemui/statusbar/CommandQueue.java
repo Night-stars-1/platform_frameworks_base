@@ -196,6 +196,7 @@ public class CommandQueue extends IStatusBar.Stub implements
     private static final int MSG_ON_DISPLAY_INFO_CHANGED = 90 << MSG_SHIFT;
     private static final int MSG_ON_CONFIGURATION_CHANGED = 91 << MSG_SHIFT;
     private static final int MSG_TOGGLE_CAMERA_FLASH = 92 << MSG_SHIFT;
+    private static final int MSG_SHOW_MOMENT_ALL_APPS = 93 << MSG_SHIFT;
 
     public static final int FLAG_EXCLUDE_NONE = 0;
     public static final int FLAG_EXCLUDE_SEARCH_PANEL = 1 << 0;
@@ -295,6 +296,7 @@ public class CommandQueue extends IStatusBar.Stub implements
         default void setImeWindowStatus(int displayId, @ImeWindowVisibility int vis,
                 @BackDispositionMode int backDisposition, boolean showImeSwitcherButton) { }
         default void showRecentApps(boolean triggeredFromAltTab) { }
+        default void showMomentAllApps(int displayId, int userId) { }
         default void hideRecentApps(boolean triggeredFromAltTab, boolean triggeredFromHomeKey) { }
         default void toggleTaskbar() { }
         default void toggleRecentApps() { }
@@ -836,6 +838,14 @@ public class CommandQueue extends IStatusBar.Stub implements
             args.argi3 = backDisposition;
             args.argi4 = showImeSwitcherButton ? 1 : 0;
             mHandler.obtainMessage(MSG_SET_IME_WINDOW_STATUS, args).sendToTarget();
+        }
+    }
+
+    @Override
+    public void showMomentAllApps(int displayId, int userId) {
+        synchronized (mLock) {
+            mHandler.removeMessages(MSG_SHOW_MOMENT_ALL_APPS);
+            mHandler.obtainMessage(MSG_SHOW_MOMENT_ALL_APPS, displayId, userId).sendToTarget();
         }
     }
 
@@ -1709,6 +1719,11 @@ public class CommandQueue extends IStatusBar.Stub implements
                 case MSG_SHOW_RECENT_APPS:
                     for (Callbacks callback : mCallbacks) {
                         callback.showRecentApps(msg.arg1 != 0);
+                    }
+                    break;
+                case MSG_SHOW_MOMENT_ALL_APPS:
+                    for (Callbacks callback : mCallbacks) {
+                        callback.showMomentAllApps(msg.arg1, msg.arg2);
                     }
                     break;
                 case MSG_HIDE_RECENT_APPS:

@@ -30,7 +30,8 @@ final class ClipboardAccessState {
 
     private final Map<String, Long> mLastPrompts = new HashMap<>();
     private final Map<String, TemporaryDecision> mDecisions = new HashMap<>();
-    private final Map<String, Long> mPendingPrompts = new HashMap<>();
+    private final Map<String, PendingPrompt> mPendingPrompts = new HashMap<>();
+    private long mNextPromptId;
 
     Decision getDecision(String key, long now) {
         final TemporaryDecision decision = mDecisions.get(key);
@@ -46,14 +47,28 @@ final class ClipboardAccessState {
 
     boolean beginPrompt(String key, long now) {
         final Long lastPrompt = mLastPrompts.get(key);
-        final Long pendingUntil = mPendingPrompts.get(key);
-        if ((pendingUntil != null && now < pendingUntil)
+        if (getPendingPrompt(key, now) != null
                 || (lastPrompt != null && now - lastPrompt < DECISION_DURATION_MILLIS)) {
             return false;
         }
         mLastPrompts.put(key, now);
-        mPendingPrompts.put(key, now + PENDING_DURATION_MILLIS);
+        mPendingPrompts.put(key, new PendingPrompt(++mNextPromptId,
+                now + PENDING_DURATION_MILLIS));
         return true;
+    }
+
+    PendingPrompt getPendingPrompt(String key, long now) {
+        final PendingPrompt prompt = mPendingPrompts.get(key);
+        if (prompt != null && now >= prompt.expiresAt) {
+            mPendingPrompts.remove(key);
+            return null;
+        }
+        return prompt;
+    }
+
+    boolean isCurrentPrompt(String key, long promptId, long now) {
+        final PendingPrompt prompt = getPendingPrompt(key, now);
+        return prompt != null && prompt.id == promptId;
     }
 
     void resolvePrompt(String key, boolean allowed, boolean persist, long now) {
@@ -85,6 +100,16 @@ final class ClipboardAccessState {
     private static boolean matches(String key, int userId, int operation) {
         return (userId < 0 || key.startsWith(userId + ":"))
                 && (operation < 0 || key.endsWith(":" + operation));
+    }
+
+    static final class PendingPrompt {
+        final long id;
+        final long expiresAt;
+
+        PendingPrompt(long id, long expiresAt) {
+            this.id = id;
+            this.expiresAt = expiresAt;
+        }
     }
 
     private static final class TemporaryDecision {

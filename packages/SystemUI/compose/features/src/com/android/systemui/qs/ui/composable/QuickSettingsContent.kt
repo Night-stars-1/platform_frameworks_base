@@ -32,7 +32,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.android.compose.animation.scene.ContentScope
 import com.android.compose.gesture.gesturesDisabled
@@ -60,6 +62,7 @@ fun ContentScope.QuickSettingsContent(
     val tileStyle by viewModel.brightnessSliderViewModel.tileStyleFlow.collectAsState()
     val circular = tileStyle.isCircular
     QuickSettingsPanelLayout(
+        circular = circular,
         brightness =
             @Composable {
                 if (viewModel.isBrightnessSliderVisible) {
@@ -75,6 +78,15 @@ fun ContentScope.QuickSettingsContent(
                             if (circular) Elements.CircularBrightnessSlider
                             else Elements.BrightnessSlider,
                     ) {
+                        val brightnessModifier =
+                            if (circular) {
+                                Modifier
+                            } else {
+                                Modifier.padding(
+                                    vertical =
+                                        dimensionResource(id = R.dimen.qs_brightness_margin_top)
+                                )
+                            }
                         BrightnessSliderContainer(
                             viewModel.brightnessSliderViewModel,
                             containerColors =
@@ -83,13 +95,9 @@ fun ContentScope.QuickSettingsContent(
                                     ContainerColors.defaultContainerColor,
                                 ),
                             modifier =
-                                Modifier.padding(
-                                        vertical =
-                                            dimensionResource(id = R.dimen.qs_brightness_margin_top)
-                                    )
-                                    .thenIf(!isBrightnessSliderInteractable) {
-                                        Modifier.gesturesDisabled()
-                                    },
+                                brightnessModifier.thenIf(!isBrightnessSliderInteractable) {
+                                    Modifier.gesturesDisabled()
+                                },
                         )
                     }
                 }
@@ -144,6 +152,7 @@ fun ContentScope.QuickSettingsContent(
 
 @Composable
 private fun QuickSettingsPanelLayout(
+    circular: Boolean,
     brightness: @Composable () -> Unit,
     tiles: @Composable () -> Unit,
     media: @Composable () -> Unit,
@@ -153,10 +162,12 @@ private fun QuickSettingsPanelLayout(
     val brightnessSettings = rememberQsBrightnessSettings()
     val sliderAtTop = brightnessSettings.sliderAtTop
     val showSlider = brightnessSettings.showSlider
+    val verticalSpacing =
+        if (circular) 8.dp else QuickSettingsShade.Dimensions.VerticalPadding
 
     if (mediaInRow) {
         Column(
-            verticalArrangement = spacedBy(QuickSettingsShade.Dimensions.VerticalPadding),
+            verticalArrangement = spacedBy(verticalSpacing),
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = modifier,
         ) {
@@ -172,14 +183,28 @@ private fun QuickSettingsPanelLayout(
         }
     } else {
         Column(
-            verticalArrangement = spacedBy(QuickSettingsShade.Dimensions.VerticalPadding),
+            verticalArrangement = spacedBy(verticalSpacing),
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = modifier,
         ) {
             if (showSlider != 0 && sliderAtTop) brightness()
-            tiles()
+            if (circular && !sliderAtTop) {
+                Box(modifier = Modifier.circularBrightnessLayoutCompensation()) { tiles() }
+            } else {
+                tiles()
+            }
             if (showSlider != 0 && !sliderAtTop) brightness()
             media()
         }
     }
 }
+
+private val CircularBrightnessLayoutCompensation = 32.dp
+
+private fun Modifier.circularBrightnessLayoutCompensation(): Modifier =
+    layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val compensatedHeight =
+            (placeable.height - CircularBrightnessLayoutCompensation.roundToPx()).coerceAtLeast(0)
+        layout(placeable.width, compensatedHeight) { placeable.place(0, 0) }
+    }

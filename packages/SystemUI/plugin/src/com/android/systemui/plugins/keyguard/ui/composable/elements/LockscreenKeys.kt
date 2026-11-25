@@ -17,6 +17,7 @@
 package com.android.systemui.plugins.keyguard.ui.composable.elements
 
 import com.android.compose.animation.scene.ContentKey
+import com.android.compose.animation.scene.DefaultElementContentPicker
 import com.android.compose.animation.scene.ElementKey
 import com.android.compose.animation.scene.HighestZIndexContentPicker
 import com.android.compose.animation.scene.MovableElementKey
@@ -156,7 +157,12 @@ object LockscreenElementKeys {
     object Clock {
         val Large = MovableElementKey("LargeClock", ContentPicker)
         val Small = MovableElementKey("SmallClock", ContentPicker)
-        val Shade = MovableElementKey("ShadeClock", ContentPicker)
+        // The shade clock is not composed in QS or the nested lockscreen clock layouts.
+        val Shade =
+            MovableElementKey(
+                "ShadeClock",
+                DefaultElementContentPicker(setOf(LockscreenMovableParentKeys.NotificationsShade)),
+            )
     }
 
     /** Smartspace provided lockscreen elements */

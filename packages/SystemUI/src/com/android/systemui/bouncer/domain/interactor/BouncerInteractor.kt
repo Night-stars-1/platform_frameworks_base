@@ -34,6 +34,7 @@ import com.android.systemui.authentication.shared.model.AuthenticationResult
 import com.android.systemui.bouncer.data.repository.BouncerRepository
 import com.android.systemui.bouncer.shared.logging.BouncerUiEvent
 import com.android.systemui.bouncer.shared.model.BouncerInputSide
+import com.android.systemui.bouncer.shared.model.TabletPinPosition
 import com.android.systemui.classifier.FalsingClassifier
 import com.android.systemui.classifier.domain.interactor.FalsingInteractor
 import com.android.systemui.common.ui.domain.interactor.ConfigurationInteractor
@@ -191,6 +192,13 @@ constructor(
 
     /** X coordinate of the last recorded touch position on the lockscreen. */
     val lastRecordedLockscreenTouchPosition = repository.lastRecordedLockscreenTouchPosition
+
+    val tabletPinPosition: StateFlow<TabletPinPosition> = repository.tabletPinPosition.asStateFlow()
+
+    /** Record the gesture origin before the PIN overlay is composed. */
+    fun recordTabletPinGesture(x: Float, width: Float) {
+        repository.tabletPinPosition.value = TabletPinPosition.fromTouch(x, width)
+    }
 
     /** Value between 0-1 that specifies by how much the bouncer UI should be scaled down. */
     val scale: StateFlow<Float> = repository.scale.asStateFlow()

@@ -219,7 +219,10 @@ constructor(
     }
 
     fun setIsDragging(dragging: Boolean) {
-        if (supportsMirroring) {
+        // The circular style draws the slider inline and has no floating mirror in the reference
+        // layout. Showing the mirror here made the whole panel dim behind the mirror window while
+        // dragging, which is what got reported as the brightness bar background flickering.
+        if (supportsMirroring && !tileStyleFlow.value.isCircular) {
             brightnessMirrorShowingInteractorLazy.get().setMirrorShowing(dragging)
         }
     }

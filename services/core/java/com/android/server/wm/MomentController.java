@@ -42,8 +42,6 @@ import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.Surface;
 import android.view.SurfaceControl;
-import android.view.animation.Interpolator;
-import android.view.animation.PathInterpolator;
 
 import com.android.internal.policy.ScreenDecorationsUtils;
 
@@ -63,27 +61,20 @@ final class MomentController {
     private static final float COMPACT_EPSILON = 0.001f;
     private static final float COMPACT_DISMISS_SCALE = 0.85f;
     private static final int MOVEMENT_SAFE_MARGIN_DP = 5;
-    private static final long EXPAND_ANIMATION_DURATION_MS = 350;
-    private static final long RESTORE_ANIMATION_DURATION_MS = 300;
-    private static final long ENTER_COMPACT_ANIMATION_DURATION_MS = 220;
-    private static final long OPEN_ANIMATION_DURATION_MS = 240;
     private static final long OPEN_REVEAL_TIMEOUT_MS = 3000;
-    private static final long CLOSE_ANIMATION_DURATION_MS = 300;
     private static final int ANIMATION_EXPAND_FULLSCREEN = 1;
     private static final int ANIMATION_RESTORE_COMPACT = 2;
     private static final int ANIMATION_ENTER_COMPACT = 3;
     private static final int ANIMATION_CONVERT_FULLSCREEN = 4;
-    private static final PathInterpolator TASK_TRANSFORM_INTERPOLATOR =
-            new PathInterpolator(0.2f, 0f, 0f, 1f);
-    private static final Interpolator TASK_TRANSFORM_REVERSE_INTERPOLATOR = input ->
-            1f - TASK_TRANSFORM_INTERPOLATOR.getInterpolation(1f - input);
 
     private final WindowManagerService mService;
     private final ArrayMap<Integer, MomentTaskSurfaceState> mStates = new ArrayMap<>();
+    private final ArrayMap<Integer, MomentLayoutSnapshot> mLayoutSnapshots = new ArrayMap<>();
     private final ArrayMap<Integer, MomentHandleWindow> mHandleWindows = new ArrayMap<>();
     private final MomentTaskAnimationRunner mAnimationRunner;
 
     private boolean mEnabled;
+    private boolean mFixedAspectRatio;
     private float mDefaultScale = DEFAULT_SCALE;
 
     MomentController(WindowManagerService service) {
@@ -109,6 +100,132 @@ final class MomentController {
     boolean isEnabled() {
         synchronized (mService.mGlobalLock) {
             return mEnabled;
+        }
+    }
+
+    void setFixedAspectRatioFromSettings(boolean fixed) {
+        synchronized (mService.mGlobalLock) {
+            if (mFixedAspectRatio == fixed) {
+                return;
+            }
+            mFixedAspectRatio = fixed;
+            forAllMomentTasksLocked(task -> {
+                final MomentTaskSurfaceState state = getOrCreateStateLocked(task);
+                updateAspectRatioLocked(task, state);
+                scheduleMomentSurfaceUpdateLocked(task);
+            });
+        }
+    }
+
+    private void updateAspectRatioLocked(Task task, MomentTaskSurfaceState state) {
+        if (state.hasFixedAspectRatio() == mFixedAspectRatio || state.isOpening()
+                || state.isClosing() || state.isTransformAnimating()) {
+            return;
+        }
+        captureLayoutSnapshotLocked(task, state.getContentCrop());
+        state.setLayoutSnapshot(mLayoutSnapshots.get(task.mTaskId));
+        state.setFixedAspectRatio(mFixedAspectRatio);
+        ensureMomentTaskLayoutLocked(task, state);
+        if (state.isMomentCompact()) {
+            constrainMomentCompactPositionLocked(task, state);
+        } else {
+            constrainMomentPositionLocked(task, state);
+        }
+        task.forAllActivities(activity -> {
+            activity.ensureActivityConfiguration(true /* ignoreVisibility */);
+        });
+        waitForLayoutLocked(task, true /* animationFinished */);
+        applyMomentStateLocked(task, state, true /* allowSurfaceHandle */);
+    }
+
+    private void captureLayoutSnapshotLocked(Task task, Rect crop) {
+        removeLayoutSnapshotLocked(task.mTaskId);
+        final MomentLayoutSnapshot snapshot = new MomentLayoutSnapshot(task);
+        snapshot.capture(crop);
+        if (!snapshot.isValid()) {
+            return;
+        }
+        mLayoutSnapshots.put(task.mTaskId, snapshot);
+        final MomentTaskSurfaceState state = getStateLocked(task);
+        if (state != null) {
+            state.setLayoutSnapshot(snapshot);
+        }
+        mService.mH.postDelayed(() -> {
+            synchronized (mService.mGlobalLock) {
+                if (mLayoutSnapshots.get(task.mTaskId) == snapshot) {
+                    Slog.w(TAG, "Timed out waiting for Moment layout, task=" + task.mTaskId);
+                    removeLayoutSnapshotLocked(task.mTaskId);
+                }
+            }
+        }, OPEN_REVEAL_TIMEOUT_MS);
+    }
+
+    private void waitForLayoutLocked(Task task, boolean animationFinished) {
+        final MomentLayoutSnapshot snapshot = mLayoutSnapshots.get(task.mTaskId);
+        if (snapshot != null) {
+            snapshot.waitForLayout(animationFinished);
+        }
+    }
+
+    void onWindowLayoutDrawn(WindowState window, SurfaceControl.Transaction t) {
+        if (mLayoutSnapshots.isEmpty()) {
+            return;
+        }
+        final Task windowTask = window.getTask();
+        final Task task = windowTask != null ? windowTask.getRootTask() : null;
+        final MomentLayoutSnapshot snapshot = task != null
+                ? mLayoutSnapshots.get(task.mTaskId) : null;
+        if (snapshot == null || !snapshot.acceptsDraw(window)) {
+            return;
+        }
+        final int layoutGeneration = snapshot.getLayoutGeneration();
+        // Do not reveal merely because finishDrawing ran: its buffer may still be waiting in
+        // a sync group. Observe commitment of the transaction that actually contains the frame.
+        t.addTransactionCommittedListener(command -> mService.mH.post(command), () -> {
+            synchronized (mService.mGlobalLock) {
+                if (mLayoutSnapshots.get(task.mTaskId) != snapshot) {
+                    return;
+                }
+                snapshot.onDrawCommitted(layoutGeneration);
+                if (snapshot.isReadyToReveal()) {
+                    revealLayoutSnapshotLocked(task.mTaskId, snapshot);
+                }
+            }
+        });
+    }
+
+    private void finishLayoutSnapshotAnimationLocked(Task task) {
+        final MomentLayoutSnapshot snapshot = mLayoutSnapshots.get(task.mTaskId);
+        if (snapshot != null) {
+            snapshot.onAnimationFinished();
+            if (snapshot.isReadyToReveal()) {
+                revealLayoutSnapshotLocked(task.mTaskId, snapshot);
+            }
+        }
+    }
+
+    private void revealLayoutSnapshotLocked(int taskId, MomentLayoutSnapshot snapshot) {
+        snapshot.reveal(() -> {
+            if (mLayoutSnapshots.get(taskId) == snapshot && snapshot.isReadyToReveal()) {
+                removeLayoutSnapshotLocked(taskId);
+            }
+        });
+    }
+
+    private void removeLayoutSnapshotLocked(int taskId) {
+        final MomentLayoutSnapshot snapshot = mLayoutSnapshots.remove(taskId);
+        if (snapshot == null) {
+            return;
+        }
+        try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
+            snapshot.destroy(t);
+            t.apply();
+        }
+        final Task task = mService.mRoot.anyTaskForId(taskId);
+        final MomentTaskSurfaceState state = getStateLocked(task);
+        if (state != null) {
+            state.setLayoutSnapshot(null);
+            scheduleMomentSurfaceUpdateLocked(task);
         }
     }
 
@@ -212,19 +329,33 @@ final class MomentController {
 
             final MomentTaskSurfaceState state = new MomentTaskSurfaceState(rootTask,
                     mDefaultScale);
-            state.prepareForFullscreenConversion();
+            state.setFixedAspectRatio(mFixedAspectRatio);
+            if (mFixedAspectRatio) {
+                final Rect crop = new Rect(taskBounds);
+                crop.offsetTo(0, 0);
+                captureLayoutSnapshotLocked(rootTask, crop);
+                state.setLayoutSnapshot(mLayoutSnapshots.get(rootTask.mTaskId));
+            }
+            state.prepareForFullscreenConversion(mFixedAspectRatio);
             mStates.put(rootTask.mTaskId, state);
+            if (mFixedAspectRatio) {
+                markNoAnimationLocked(rootTask);
+                rootTask.setWindowingMode(WINDOWING_MODE_MOMENT);
+            }
             ensureMomentTaskLayoutLocked(rootTask, state);
             constrainMomentPositionLocked(rootTask, state);
             final Rect targetBounds = state.getSurfaceBounds();
             final Rect fullscreenBounds = state.getFullscreenBounds();
-            final float startScaleX = (float) fullscreenBounds.width() / taskBounds.width();
-            final float startScaleY = (float) fullscreenBounds.height() / taskBounds.height();
+            final float startScaleX = (float) fullscreenBounds.width()
+                    / rootTask.getBounds().width();
+            final float startScaleY = (float) fullscreenBounds.height()
+                    / rootTask.getBounds().height();
 
             markNoAnimationLocked(rootTask);
             rootTask.setWindowingMode(WINDOWING_MODE_MOMENT);
             if (rootTask.getWindowingMode() != WINDOWING_MODE_MOMENT) {
                 mStates.remove(rootTask.mTaskId);
+                removeLayoutSnapshotLocked(rootTask.mTaskId);
                 state.destroy(rootTask.getSyncTransaction());
                 throw new IllegalStateException(
                         "Task does not support Moment: " + rootTask.mTaskId);
@@ -232,6 +363,7 @@ final class MomentController {
             rootTask.forAllActivities(activity -> {
                 activity.ensureActivityConfiguration(true /* ignoreVisibility */);
             });
+            waitForLayoutLocked(rootTask, false /* animationFinished */);
             startTaskTransformAnimationFromLocked(rootTask, state, startScaleX, startScaleY,
                     fullscreenBounds.exactCenterX(), fullscreenBounds.exactCenterY(), 1f,
                     getDisplayCornerRadiusLocked(rootTask),
@@ -239,8 +371,7 @@ final class MomentController {
                     targetBounds.exactCenterY(), 1f,
                     MomentGeometry.getCornerRadius(getDensityLocked(rootTask)) * state.getScale(),
                     1f,
-                    EXPAND_ANIMATION_DURATION_MS,
-                    ANIMATION_CONVERT_FULLSCREEN, TASK_TRANSFORM_REVERSE_INTERPOLATOR);
+                    MomentMotion.SLOW_SPATIAL, ANIMATION_CONVERT_FULLSCREEN);
             return rootTask.mTaskId;
         }
     }
@@ -280,6 +411,9 @@ final class MomentController {
 
     void onTaskRemoved(Task task) {
         synchronized (mService.mGlobalLock) {
+            if (task != null) {
+                removeLayoutSnapshotLocked(task.mTaskId);
+            }
             removeHandleWindowLocked(task);
             if (task != null) {
                 final MomentTaskSurfaceState state = mStates.remove(task.mTaskId);
@@ -301,6 +435,7 @@ final class MomentController {
             if (state == null) {
                 return;
             }
+            removeLayoutSnapshotLocked(task.mTaskId);
             final boolean wasClosing = state.isClosing();
             cancelTaskAnimationLocked(task, state);
             final SurfaceControl.Transaction t = task.getSyncTransaction();
@@ -319,7 +454,8 @@ final class MomentController {
 
     void dumpStatus(PrintWriter pw) {
         synchronized (mService.mGlobalLock) {
-            pw.println("Moment enabled=" + mEnabled + " defaultScale=" + mDefaultScale);
+            pw.println("Moment enabled=" + mEnabled + " defaultScale=" + mDefaultScale
+                    + " fixedAspectRatio=" + mFixedAspectRatio);
             dumpTasksLocked(pw);
         }
     }
@@ -336,6 +472,7 @@ final class MomentController {
                 return;
             }
             final MomentTaskSurfaceState state = getOrCreateStateLocked(task);
+            updateAspectRatioLocked(task, state);
             constrainMomentPositionLocked(task, state);
             final boolean visibilityChanged = state.ensureForceTranslucent();
             final ActivityRecord topActivity = task.topRunningActivity();
@@ -447,6 +584,15 @@ final class MomentController {
         }
     }
 
+    void setMomentResizing(Task task, boolean resizing) {
+        synchronized (mService.mGlobalLock) {
+            if (task == null || task.getWindowingMode() != WINDOWING_MODE_MOMENT) return;
+            final MomentTaskSurfaceState state = getOrCreateStateLocked(task);
+            state.setResizing(resizing);
+            applyMomentStateLocked(task, state, true /* allowSurfaceHandle */);
+        }
+    }
+
     Rect resizeMomentTask(Task task, float scale, int fixedX, int fixedY,
             boolean resizeFromLeft, boolean resizeFromTop) {
         synchronized (mService.mGlobalLock) {
@@ -495,7 +641,7 @@ final class MomentController {
                     bounds.exactCenterY(), 1f,
                     MomentGeometry.getCornerRadius(getDensityLocked(task)) * endScale,
                     1f,
-                    ENTER_COMPACT_ANIMATION_DURATION_MS,
+                    MomentMotion.DEFAULT_SPATIAL,
                     ANIMATION_ENTER_COMPACT);
         }
     }
@@ -612,13 +758,28 @@ final class MomentController {
                     || state.isTransformAnimating()) {
                 return;
             }
-            final Rect bounds = state.getSurfaceBounds();
-            final float endScale = clampScaleLocked(task, state, state.getCompactRestoreScale());
+            final Rect safeBounds = new Rect();
+            getMomentSafeBoundsLocked(task, safeBounds);
+            final DisplayContent display = task.getDisplayContent();
+            if (display != null) {
+                final android.graphics.Insets imeInsets = display.getInsetsStateController()
+                        .getRawInsetsState().calculateInsets(display.getBounds(), display.getBounds(),
+                                android.view.WindowInsets.Type.ime(), false);
+                safeBounds.bottom = Math.max(safeBounds.top + 1,
+                        Math.min(safeBounds.bottom, display.getBounds().bottom - imeInsets.bottom));
+            }
+            final Rect crop = state.getContentCrop();
+            final float availableHeight = Math.max(1f, safeBounds.height()
+                    - HANDLE_AREA_HEIGHT_DP * getDensityLocked(task));
+            final float endScale = Math.max(MIN_SCALE, Math.min(
+                    clampScaleLocked(task, state, state.getCompactRestoreScale()),
+                    Math.min((float) safeBounds.width() / Math.max(1, crop.width()),
+                            availableHeight / Math.max(1, crop.height()))));
             startTaskTransformAnimationLocked(task, state, endScale,
-                    bounds.exactCenterX(), bounds.exactCenterY(), 1f,
+                    safeBounds.exactCenterX(), safeBounds.exactCenterY(), 1f,
                     MomentGeometry.getCornerRadius(getDensityLocked(task)) * endScale,
                     1f,
-                    RESTORE_ANIMATION_DURATION_MS, ANIMATION_RESTORE_COMPACT);
+                    MomentMotion.DEFAULT_SPATIAL, ANIMATION_RESTORE_COMPACT);
         }
     }
 
@@ -633,6 +794,9 @@ final class MomentController {
             if (state.isOpening() || state.isClosing() || state.isTransformAnimating()) {
                 return;
             }
+            if (state.hasFixedAspectRatio()) {
+                captureLayoutSnapshotLocked(task, state.getContentCrop());
+            }
             final Rect taskBounds = task.getBounds();
             final Rect fullscreenBounds = state.getFullscreenBounds();
             final float endScaleX = (float) fullscreenBounds.width() / taskBounds.width();
@@ -641,7 +805,7 @@ final class MomentController {
                     fullscreenBounds.exactCenterX(), fullscreenBounds.exactCenterY(), 1f,
                     getDisplayCornerRadiusLocked(task),
                     0f,
-                    EXPAND_ANIMATION_DURATION_MS, ANIMATION_EXPAND_FULLSCREEN);
+                    MomentMotion.SLOW_SPATIAL, ANIMATION_EXPAND_FULLSCREEN);
         }
     }
 
@@ -695,6 +859,7 @@ final class MomentController {
         MomentTaskSurfaceState state = target != null ? mStates.get(target.mTaskId) : null;
         if (state == null) {
             state = new MomentTaskSurfaceState(target, mDefaultScale);
+            state.setFixedAspectRatio(mFixedAspectRatio);
             mStates.put(target.mTaskId, state);
         }
         ensureMomentTaskLayoutLocked(target, state);
@@ -716,6 +881,7 @@ final class MomentController {
         MomentTaskSurfaceState state = mStates.get(target.mTaskId);
         if (state == null) {
             state = new MomentTaskSurfaceState(target, mDefaultScale);
+            state.setFixedAspectRatio(mFixedAspectRatio);
             mStates.put(target.mTaskId, state);
         }
         return state.getPortraitDisplayFrames();
@@ -729,11 +895,20 @@ final class MomentController {
         final Rect displayBounds = new Rect();
         displayContent.getBounds(displayBounds);
         final boolean landscape = displayBounds.width() > displayBounds.height();
-        final Rect desiredBounds = new Rect(0, 0,
+        final Rect desiredBounds = state.hasFixedAspectRatio()
+                ? state.getFixedAspectRatioBounds(displayContent) : new Rect(0, 0,
                 landscape ? displayBounds.height() : displayBounds.width(),
                 landscape ? displayBounds.width() : displayBounds.height());
         if (!state.shouldPreserveTaskBounds() && !task.getBounds().equals(desiredBounds)) {
+            final boolean coverLayout = state.hasFixedAspectRatio() && state.hasApplied()
+                    && !mLayoutSnapshots.containsKey(task.mTaskId);
+            if (coverLayout) {
+                captureLayoutSnapshotLocked(task, state.getContentCrop());
+            }
             task.setBounds(desiredBounds);
+            if (mLayoutSnapshots.containsKey(task.mTaskId)) {
+                waitForLayoutLocked(task, !state.isTransformAnimating());
+            }
         }
         final float maxScale = calculateMomentMaxScaleLocked(task);
         state.updateLandscapeLayout(landscape, LANDSCAPE_DEFAULT_SCALE, maxScale);
@@ -903,10 +1078,10 @@ final class MomentController {
         scheduleMomentSurfaceUpdateLocked(task);
 
         final MomentGeometry.MorphFrame frame = new MomentGeometry.MorphFrame();
-        mAnimationRunner.start(state, CLOSE_ANIMATION_DURATION_MS, null,
-                () -> state.isCloseAnimation(generation), progress -> {
+        mAnimationRunner.start(state, MomentMotion.EXIT_SPATIAL,
+                () -> state.isCloseAnimation(generation), (spatial, effects) -> {
                 MomentGeometry.evaluateCloseMorph(startBounds, taskScale, density,
-                        progress, frame);
+                        MomentMotion.clamp(spatial), effects, frame);
                 try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                     if (state.applyCloseAnimationFrame(t, generation, frame.centerX, frame.centerY,
                             frame.width, frame.height, frame.cornerRadius, frame.alpha)) {
@@ -926,7 +1101,7 @@ final class MomentController {
         final float taskScale = state.getScale();
         final float density = getDensityLocked(task);
         final MomentGeometry.MorphFrame initialFrame = new MomentGeometry.MorphFrame();
-        MomentGeometry.evaluateCloseMorph(endBounds, taskScale, density, 1f, initialFrame);
+        MomentGeometry.evaluateOpenMorph(endBounds, taskScale, density, 0f, 0f, initialFrame);
         final int color = mService.mContext.getColor(android.R.color.system_accent1_100);
         final int generation = state.beginOpenAnimation(startTransaction, color,
                 initialFrame.centerX, initialFrame.centerY, initialFrame.width,
@@ -946,11 +1121,10 @@ final class MomentController {
     private void startMomentOpenAnimator(int taskId, MomentTaskSurfaceState state, int generation,
             Rect endBounds, float taskScale, float density) {
         final MomentGeometry.MorphFrame frame = new MomentGeometry.MorphFrame();
-        mAnimationRunner.start(state, OPEN_ANIMATION_DURATION_MS, null,
-                () -> state.isOpenAnimation(generation), progress -> {
-            final float reverseProgress = 1f - progress;
-            MomentGeometry.evaluateCloseMorph(endBounds, taskScale, density,
-                    reverseProgress, frame);
+        mAnimationRunner.start(state, MomentMotion.DEFAULT_SPATIAL,
+                () -> state.isOpenAnimation(generation), (spatial, effects) -> {
+            MomentGeometry.evaluateOpenMorph(endBounds, taskScale, density,
+                    spatial, effects, frame);
             try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                 if (state.applyOpenAnimationFrame(t, generation, frame.centerX, frame.centerY,
                         frame.width, frame.height, frame.cornerRadius, frame.alpha)) {
@@ -1019,33 +1193,36 @@ final class MomentController {
 
     private void startTaskTransformAnimationLocked(Task task, MomentTaskSurfaceState state,
             float endScale, float endCenterX, float endCenterY, float endAlpha,
-            float endDisplayedCornerRadius, float endCropProgress, long duration, int endAction) {
+            float endDisplayedCornerRadius, float endCropProgress, MomentMotion.Spec spatialSpec,
+            int endAction) {
         startTaskTransformAnimationLocked(task, state, endScale, endScale, endCenterX, endCenterY,
-                endAlpha, endDisplayedCornerRadius, endCropProgress, duration, endAction);
+                endAlpha, endDisplayedCornerRadius, endCropProgress, spatialSpec, endAction);
     }
 
     private void startTaskTransformAnimationLocked(Task task, MomentTaskSurfaceState state,
             float endScaleX, float endScaleY, float endCenterX, float endCenterY, float endAlpha,
-            float endDisplayedCornerRadius, float endCropProgress, long duration, int endAction) {
+            float endDisplayedCornerRadius, float endCropProgress, MomentMotion.Spec spatialSpec,
+            int endAction) {
         final Rect startBounds = state.getSurfaceBounds();
         final float startScale = state.getScale();
         startTaskTransformAnimationFromLocked(task, state, startScale, startScale,
                 startBounds.exactCenterX(), startBounds.exactCenterY(), 1f,
                 state.getDisplayedCornerRadius(), endScaleX, endScaleY, endCenterX, endCenterY,
                 endAlpha, endDisplayedCornerRadius, endCropProgress,
-                duration, endAction, TASK_TRANSFORM_INTERPOLATOR);
+                spatialSpec, endAction);
     }
 
     private void startTaskTransformAnimationFromLocked(Task task, MomentTaskSurfaceState state,
             float startScaleX, float startScaleY, float startCenterX, float startCenterY,
             float startAlpha, float startDisplayedCornerRadius, float endScaleX, float endScaleY,
             float endCenterX, float endCenterY, float endAlpha, float endDisplayedCornerRadius,
-            float endCropProgress, long duration, int endAction, Interpolator interpolator) {
+            float endCropProgress, MomentMotion.Spec spatialSpec, int endAction) {
         final float startCropProgress = endAction == ANIMATION_CONVERT_FULLSCREEN ? 0f : 1f;
         final int generation = state.beginTransformAnimation(startScaleX, startScaleY,
                 startCenterX, startCenterY, startAlpha, startDisplayedCornerRadius,
                 startCropProgress);
-        state.apply(task.getSyncTransaction(), false /* showHandle */);
+        final SurfaceControl.Transaction startTransaction = task.getSyncTransaction();
+        state.apply(startTransaction, false /* showHandle */);
         if (endAction == ANIMATION_RESTORE_COMPACT) {
             updateHandleWindowLocked(task);
         } else {
@@ -1053,24 +1230,62 @@ final class MomentController {
         }
         scheduleMomentSurfaceUpdateLocked(task);
 
-        mAnimationRunner.start(state, duration, interpolator,
-                () -> state.isTransformAnimation(generation), progress -> {
-                final float scaleX = lerp(startScaleX, endScaleX, progress);
-                final float scaleY = lerp(startScaleY, endScaleY, progress);
-                final float centerX = lerp(startCenterX, endCenterX, progress);
-                final float centerY = lerp(startCenterY, endCenterY, progress);
-                final float alpha = lerp(startAlpha, endAlpha, progress);
+        final Rect baseBounds = new Rect(task.getBounds());
+        final Rect contentCrop = state.getContentCrop();
+        final Rect envelope = new Rect(task.getDisplayContent().getBounds());
+        // Preserve an intentionally stashed source or destination, but do not let spring
+        // overshoot push an otherwise visible task off the physical display.
+        envelope.union(Math.round(startCenterX - baseBounds.width() * startScaleX / 2f),
+                Math.round(startCenterY - baseBounds.height() * startScaleY / 2f),
+                Math.round(startCenterX + baseBounds.width() * startScaleX / 2f),
+                Math.round(startCenterY + baseBounds.height() * startScaleY / 2f));
+        final boolean[] settlingPosted = {false};
+        // IME/configuration changes can keep the task's sync transaction pending while app
+        // buffers redraw. Do not run the animation against an uncommitted initial pose: it
+        // would finish invisibly and the first presented frame would already be a small window.
+        // Use the same committed-frame handoff as the Moment open animation. The generation
+        // check in the runner discards starts after task removal or animation cancellation.
+        startTransaction.addTransactionCommittedListener(Runnable::run,
+                () -> mAnimationRunner.start(state, spatialSpec,
+                () -> state.isTransformAnimation(generation), (progress, effects) -> {
+                final float cropProgress = lerp(startCropProgress, endCropProgress, effects);
+                final float cropWidth = lerp(baseBounds.width(), contentCrop.width(), cropProgress);
+                final float cropHeight = lerp(baseBounds.height(), contentCrop.height(), cropProgress);
+                final float rawScaleX = Math.max(0.001f, lerp(startScaleX, endScaleX, progress));
+                final float rawScaleY = Math.max(0.001f, lerp(startScaleY, endScaleY, progress));
+                final float fit = Math.min(1f, Math.min(envelope.width() / (cropWidth * rawScaleX),
+                        envelope.height() / (cropHeight * rawScaleY)));
+                final float scaleX = rawScaleX * fit;
+                final float scaleY = rawScaleY * fit;
+                final float halfWidth = cropWidth * scaleX / 2f;
+                final float halfHeight = cropHeight * scaleY / 2f;
+                final float centerX = clampToRange(lerp(startCenterX, endCenterX, progress),
+                        envelope.left + halfWidth, envelope.right - halfWidth);
+                final float centerY = clampToRange(lerp(startCenterY, endCenterY, progress),
+                        envelope.top + halfHeight, envelope.bottom - halfHeight);
+                final float alpha = MomentMotion.clamp(lerp(startAlpha, endAlpha, effects));
                 final float displayedCornerRadius = lerp(startDisplayedCornerRadius,
-                        endDisplayedCornerRadius, progress);
-                final float cropProgress = lerp(startCropProgress, endCropProgress, progress);
+                        endDisplayedCornerRadius, MomentMotion.clamp(progress));
                 try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                     if (state.applyAnimatedTransform(t, generation, scaleX, scaleY, centerX, centerY,
                             alpha, displayedCornerRadius, cropProgress)) {
                         t.apply();
                     }
                 }
+                if (endAction == ANIMATION_CONVERT_FULLSCREEN && progress >= 0.95f
+                        && !settlingPosted[0]) {
+                    settlingPosted[0] = true;
+                    mService.mH.post(() -> {
+                        synchronized (mService.mGlobalLock) {
+                            if (getStateLocked(task) == state
+                                    && state.isTransformAnimation(generation)) {
+                                finishLayoutSnapshotAnimationLocked(task);
+                            }
+                        }
+                    });
+                }
                 }, () -> mService.mH.post(() -> onTaskTransformAnimationFinished(task.mTaskId,
-                        state, generation, endScaleX, endCenterX, endCenterY, endAction)));
+                        state, generation, endScaleX, endCenterX, endCenterY, endAction))));
     }
 
     private float getDisplayCornerRadiusLocked(Task task) {
@@ -1118,6 +1333,7 @@ final class MomentController {
                     state.setScale(endScale);
                     constrainMomentPositionLocked(task, state);
                     applyMomentStateLocked(task, state, true /* allowSurfaceHandle */);
+                    finishLayoutSnapshotAnimationLocked(task);
                     break;
                 default:
                     break;
@@ -1161,6 +1377,7 @@ final class MomentController {
     }
 
     private void closeMomentTaskLocked(Task task) {
+        removeLayoutSnapshotLocked(task.mTaskId);
         removeHandleWindowLocked(task);
         final MomentTaskSurfaceState state = mStates.get(task.mTaskId);
         if (state != null) {
@@ -1219,6 +1436,11 @@ final class MomentController {
     }
 
     private void exitMomentTaskLocked(Task task) {
+        final MomentTaskSurfaceState currentState = getStateLocked(task);
+        if (currentState != null && currentState.hasFixedAspectRatio()
+                && !mLayoutSnapshots.containsKey(task.mTaskId)) {
+            captureLayoutSnapshotLocked(task, currentState.getContentCrop());
+        }
         final MomentTaskSurfaceState state = mStates.remove(task.mTaskId);
         if (state != null) {
             cancelTaskAnimationLocked(task, state);
@@ -1229,6 +1451,16 @@ final class MomentController {
         markNoAnimationLocked(task);
         task.setWindowingMode(WINDOWING_MODE_FULLSCREEN);
         task.setBounds(null);
+        final MomentLayoutSnapshot snapshot = mLayoutSnapshots.get(task.mTaskId);
+        if (snapshot != null) {
+            final Rect bounds = new Rect(task.getBounds());
+            bounds.offsetTo(0, 0);
+            snapshot.applyBounds(task.getSyncTransaction(), bounds);
+            task.forAllActivities(activity -> {
+                activity.ensureActivityConfiguration(true /* ignoreVisibility */);
+            });
+            waitForLayoutLocked(task, true /* animationFinished */);
+        }
         scheduleMomentSurfaceUpdateLocked(task);
     }
 
@@ -1319,7 +1551,7 @@ final class MomentController {
             mHandleWindows.put(task.mTaskId, handleWindow);
         }
         handleWindow.showOrUpdate(handleBounds, state.isMomentCompact(),
-                state.isTransformAnimating());
+                state.isTransformAnimating() || mLayoutSnapshots.containsKey(task.mTaskId));
     }
 
     private void markNoAnimationLocked(Task task) {

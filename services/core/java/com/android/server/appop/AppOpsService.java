@@ -92,6 +92,7 @@ import android.app.ActivityManager.ProcessState;
 import android.app.ActivityManagerInternal;
 import android.app.AppGlobals;
 import android.app.AppOpsManager;
+import android.app.UwuAppPolicyManager;
 import android.app.AppOpsManager.AttributedOpEntry;
 import android.app.AppOpsManager.AttributionFlags;
 import android.app.AppOpsManager.HistoricalOps;
@@ -123,8 +124,8 @@ import android.hardware.camera2.CameraDevice.CAMERA_AUDIO_RESTRICTION;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Binder;
-import android.os.Build;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerExecutor;
 import android.os.IBinder;
@@ -1475,6 +1476,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         mIoHandler.post(PooledLambda.obtainRunnable(HistoricalRegistryInterface::clearHistory,
                 mHistoricalRegistry, uid, packageName));
 
+        mAppOpsCheckingService.removePackage(packageName, UserHandle.getUserId(uid));
         UidState uidState = mUidStates.get(uid);
         if (uidState == null) {
             return;
@@ -1484,7 +1486,6 @@ public class AppOpsService extends IAppOpsService.Stub {
 
         // Remove any package state if such.
         removedOps = uidState.pkgOps.remove(packageName);
-        mAppOpsCheckingService.removePackage(packageName, UserHandle.getUserId(uid));
 
         if (removedOps != null) {
             scheduleFastWriteLocked();
@@ -2156,8 +2157,82 @@ public class AppOpsService extends IAppOpsService.Stub {
                 Binder.getCallingPid(), Binder.getCallingUid(), null);
     }
 
+    private void enforceUwuPolicyUser(int userId) {
+        mContext.enforceCallingOrSelfPermission(Manifest.permission.MANAGE_APP_OPS_MODES,
+                "Manage uwu app policies");
+        if (userId < 0) throw new IllegalArgumentException("Invalid user");
+        if (UserHandle.getCallingUserId() != userId) {
+            mContext.enforceCallingOrSelfPermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL,
+                    "Manage another user's app policies");
+        }
+    }
+
+    @Override
+    public Bundle getUwuAppPolicies(int userId) {
+        enforceUwuPolicyUser(userId);
+        return mAppOpsCheckingService.getUwuAppPolicies(userId);
+    }
+
+    @Override
+    public void setUwuAppPolicies(int userId, String[] packages, int[] types, int[] policies,
+            int migrationFeature) {
+        enforceUwuPolicyUser(userId);
+        if (migrationFeature != 0 && Binder.getCallingUid() != Process.SYSTEM_UID) {
+            throw new SecurityException("Only system may migrate app policies");
+        }
+        if (packages == null || types == null || policies == null
+                || packages.length != types.length || types.length != policies.length
+                || packages.length > 100000 || (migrationFeature != 0
+                    && migrationFeature != 1 && migrationFeature != 2 && migrationFeature != 4)) {
+            throw new IllegalArgumentException("Invalid app policy batch");
+        }
+        for (int i = 0; i < packages.length; i++) {
+            if (packages[i] == null || packages[i].isEmpty()) {
+                throw new IllegalArgumentException("Invalid package name");
+            }
+            UwuAppPolicyManager.encode(types[i], policies[i]);
+            if (migrationFeature != 0
+                    && UwuAppPolicyManager.feature(types[i]) != migrationFeature) {
+                throw new IllegalArgumentException("Invalid migration feature");
+            }
+            try {
+                int uid = mContext.getPackageManager().getPackageUidAsUser(packages[i], userId);
+                if (uid < 0) throw new IllegalArgumentException("Unknown package UID");
+            } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+                if (migrationFeature == 0) throw new IllegalArgumentException("Unknown package", e);
+                // Deleted packages have no state to migrate.
+                packages[i] = null;
+            }
+        }
+        mAppOpsCheckingService.setUwuAppPolicies(userId, packages, types, policies, migrationFeature);
+        synchronized (this) {
+            for (String name : packages) {
+                if (name == null) continue;
+                int uid = getPackageManagerInternal().getPackageUid(name, 0, userId);
+                if (uid < 0) continue;
+                UidState uidState = getUidStateLocked(uid, true);
+                Ops ops = uidState.pkgOps.get(name);
+                if (ops == null) {
+                    ops = new Ops(name, uidState);
+                    uidState.pkgOps.put(name.intern(), ops);
+                }
+                SparseIntArray modes = mAppOpsCheckingService.getNonDefaultPackageModes(name, userId);
+                for (int index = 0; index < modes.size(); index++) {
+                    int code = modes.keyAt(index);
+                    if (ops.indexOfKey(code) < 0) {
+                        ops.put(code, new Op(uidState, name, code, uid));
+                    }
+                }
+            }
+        }
+    }
+
     @Override
     public void setUidMode(int code, int uid, int mode) {
+        if (code >= AppOpsManager.OP_UWU_READ_CLIPBOARD
+                && code <= AppOpsManager.OP_UWU_RECEIVE_ACTIVITY) {
+            throw new IllegalArgumentException("uwu policies require a package mode");
+        }
         setUidMode(code, uid, mode, null);
     }
 

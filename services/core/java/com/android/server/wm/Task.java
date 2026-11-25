@@ -2993,9 +2993,8 @@ class Task extends TaskFragment {
 
         EventLogTags.writeWmTaskRemoved(mTaskId, getRootTaskId(), getDisplayId(), reason);
         clearPinnedTaskIfNeed();
-        if (getWindowingMode() == WINDOWING_MODE_MOMENT) {
-            mWmService.mMomentController.onTaskRemoved(this);
-        }
+        // A layout cover may outlive Moment until the first fullscreen frame is committed.
+        mWmService.mMomentController.onTaskRemoved(this);
         clearExcludeLayersFromTaskSnapshot();
         if (mChildPipActivity != null) {
             mChildPipActivity.clearLastParentBeforePip();

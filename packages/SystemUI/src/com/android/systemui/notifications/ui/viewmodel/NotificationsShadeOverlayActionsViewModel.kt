@@ -53,8 +53,6 @@ constructor(private val shadeModeInteractor: ShadeModeInteractor) : UserActionsV
                         ),
                     )
                     if (shadeMode is ShadeMode.Dual) {
-                        // Distinct keys let the scene framework distinguish the two swipe results,
-                        // even though both replace this overlay with the same target.
                         put(
                             Swipe.Left,
                             ReplaceByOverlay(Overlays.QuickSettingsShade, TransitionKeys.ShadeSwipeLeft),

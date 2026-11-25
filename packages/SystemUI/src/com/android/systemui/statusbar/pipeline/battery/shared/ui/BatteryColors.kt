@@ -41,6 +41,14 @@ sealed interface BatteryColors {
     /** The layered attribution. Should match the tint of other status bar icons */
     val attribution: Color
 
+    data class ThemedDefault(val foreground: Color, val background: Color) : BatteryColors {
+        override val fill = foreground
+        override val glyph = background
+        override val backgroundOnly = foreground.copy(alpha = 0.20f)
+        override val backgroundWithGlyph = foreground.copy(alpha = 0.55f)
+        override val attribution = foreground
+    }
+
     /**
      * Light theme: light background, dark icons
      *

@@ -16,6 +16,8 @@
 
 package com.android.server.wm;
 
+import android.animation.ValueAnimator;
+
 import com.android.internal.dynamicanimation.animation.DynamicAnimation;
 import com.android.internal.dynamicanimation.animation.FlingAnimation;
 import com.android.internal.dynamicanimation.animation.FloatValueHolder;
@@ -25,8 +27,8 @@ import com.android.internal.dynamicanimation.animation.SpringForce;
 final class MomentCompactMotionRunner {
 
     private static final float FLING_FRICTION = 1.9f;
-    private static final float MOTION_STIFFNESS = 300f;
-    private static final float MOTION_DAMPING = SpringForce.DAMPING_RATIO_LOW_BOUNCY;
+    private static final float MOTION_STIFFNESS = MomentMotion.DEFAULT_SPATIAL.stiffness;
+    private static final float MOTION_DAMPING = MomentMotion.DEFAULT_SPATIAL.damping;
 
     interface UpdateCallback {
         void onUpdate(float centerX, float centerY, float magnetProgress);
@@ -72,6 +74,14 @@ final class MomentCompactMotionRunner {
     void springTo(float targetCenterX, float targetCenterY, float targetMagnetProgress,
             float velocityX, float velocityY, float stiffness, float dampingRatio,
             Runnable endAction) {
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            cancel();
+            setValues(targetCenterX, targetCenterY, targetMagnetProgress, true /* dispatch */);
+            if (endAction != null) {
+                endAction.run();
+            }
+            return;
+        }
         cancel();
         final int generation = ++mGeneration;
         final int[] endedAnimations = new int[1];
@@ -86,10 +96,12 @@ final class MomentCompactMotionRunner {
                     dispatchUpdate();
                 });
         mScaleSpring = createSpring(new FloatValueHolder(mMagnetProgress), targetMagnetProgress,
-                0f, stiffness, dampingRatio, (animation, value, unusedVelocity) -> {
+                0f, MomentMotion.DEFAULT_EFFECTS.stiffness,
+                MomentMotion.DEFAULT_EFFECTS.damping, (animation, value, unusedVelocity) -> {
                     mMagnetProgress = clampProgress(value);
                     dispatchUpdate();
                 });
+        mScaleSpring.setMinimumVisibleChange(0.001f);
         final DynamicAnimation.OnAnimationEndListener endListener =
                 (animation, canceled, value, velocity) -> {
                     if (!canceled && generation == mGeneration
@@ -107,7 +119,8 @@ final class MomentCompactMotionRunner {
 
     void dismissTo(float targetY, Runnable endAction) {
         springTo(mCenterX, targetY, mMagnetProgress, 0f, 0f,
-                MOTION_STIFFNESS, MOTION_DAMPING, endAction);
+                MomentMotion.EXIT_SPATIAL.stiffness,
+                MomentMotion.EXIT_SPATIAL.damping, endAction);
     }
 
     boolean retargetSpring(float targetCenterX, float targetCenterY,
@@ -128,6 +141,14 @@ final class MomentCompactMotionRunner {
 
     void flingThenSpring(float minX, float maxX, float velocityX,
             float minY, float maxY, float velocityY, Runnable endAction) {
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            cancel();
+            final float targetX = velocityX < 0f ? minX : velocityX > 0f ? maxX
+                    : mCenterX < (minX + maxX) / 2f ? minX : maxX;
+            setValues(targetX, Math.max(minY, Math.min(maxY, mCenterY)), 0f, true /* dispatch */);
+            endAction.run();
+            return;
+        }
         cancel();
         final int generation = ++mGeneration;
         final int[] endedAxes = new int[1];
@@ -139,7 +160,7 @@ final class MomentCompactMotionRunner {
         startXFlingThenSpring(minX, maxX, velocityX, generation, axisEnd);
         startYFlingThenSpring(minY, maxY, velocityY, generation, axisEnd);
         mScaleSpring = createSpring(new FloatValueHolder(mMagnetProgress), 0f, 0f,
-                MOTION_STIFFNESS, MOTION_DAMPING,
+                MomentMotion.DEFAULT_EFFECTS.stiffness, MomentMotion.DEFAULT_EFFECTS.damping,
                 (animation, value, unusedVelocity) -> {
                     mMagnetProgress = clampProgress(value);
                     dispatchUpdate();
@@ -149,6 +170,7 @@ final class MomentCompactMotionRunner {
                 axisEnd.run();
             }
         });
+        mScaleSpring.setMinimumVisibleChange(0.001f);
         mScaleSpring.start();
     }
 

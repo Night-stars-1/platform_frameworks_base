@@ -6908,6 +6908,35 @@ public class NotificationStackScrollLayout
         }
     }
 
+    /** Update row RenderNodes without rerecording the notification stack display list. */
+    public interface DualShadeRowTransform {
+        void apply(View child, int rank);
+    }
+
+    private DualShadeRowTransform mDualShadeRowTransform;
+    public void setDualShadeRowTransform(@Nullable DualShadeRowTransform transform) {
+        mDualShadeRowTransform = transform;
+    }
+
+    public void updateDualShadeRowTransforms() {
+        if (mDualShadeRowTransform == null) return;
+        int rank = 0;
+        for (int i = 0; i < getChildCount(); i++) {
+            View child = getChildAt(i);
+            if (child instanceof ExpandableView row) {
+                // Keep temporarily invisible rows' progress and rank during transitions so they
+                // do not skip animations when they reappear.
+                // In the expanded panel, pinned notifications move with the list; floating
+                // notifications outside it keep their existing animation.
+                boolean eligible = child.getVisibility() != GONE
+                        && (mIsExpanded || !row.isHeadsUpState())
+                        && !row.isExpandAnimationRunning()
+                        && !row.hasExpandingChild();
+                mDualShadeRowTransform.apply(child, eligible ? rank++ : -1);
+            }
+        }
+    }
+
     @Override
     protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
         boolean shouldUseClipping =

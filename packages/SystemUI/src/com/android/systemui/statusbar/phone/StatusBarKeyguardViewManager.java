@@ -1828,6 +1828,15 @@ public class StatusBarKeyguardViewManager implements RemoteInputController.Callb
 
     /** Update keyguard position based on a tapped X coordinate. */
     public void updateKeyguardPosition(float x) {
+        if (mContext.getResources().getConfiguration().smallestScreenWidthDp >= 600
+                && !isBouncerShowing()) {
+            int width =
+                    mNotificationContainer != null
+                            ? mNotificationContainer.getRootView().getWidth()
+                            : 0;
+            if (width <= 0) width = mContext.getResources().getDisplayMetrics().widthPixels;
+            mBouncerInteractor.get().recordTabletPinGesture(x, width);
+        }
         mPrimaryBouncerInteractor.setKeyguardPosition(x);
     }
 

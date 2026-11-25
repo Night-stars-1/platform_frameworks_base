@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.android.systemui.lifecycle.rememberViewModel
 import com.android.systemui.statusbar.phone.domain.interactor.IsAreaDark
+import com.android.systemui.statusbar.pipeline.battery.shared.ui.BatteryColors
 import com.android.systemui.statusbar.pipeline.battery.ui.viewmodel.BatteryViewModel
 
 @Composable
@@ -40,6 +41,7 @@ fun BatteryWithEstimate(
     showEstimate: Boolean,
     modifier: Modifier = Modifier,
     showIcon: Boolean = true,
+    defaultColors: BatteryColors? = null,
 ) {
     val viewModel =
         rememberViewModel(traceName = "BatteryWithEstimate") { viewModelFactory.create() }
@@ -59,6 +61,7 @@ fun BatteryWithEstimate(
                 viewModel = viewModel,
                 isDarkProvider = isDarkProvider,
                 modifier = Modifier.height(batteryHeight).align(Alignment.CenterVertically),
+                defaultColors = defaultColors,
             )
         }
         if (showEstimate) {

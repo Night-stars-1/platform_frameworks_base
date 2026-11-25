@@ -334,6 +334,8 @@ private class DragControllerImpl(
         val distance = animation.distance()
         val previousOffset = animation.gestureContext.dragOffset
         val desiredOffset = previousOffset + delta
+        val projectedDistance =
+            animation.contentTransition.transformationSpec.distance as? ThresholdSwipeDistance
 
         // Note: the distance could be negative if fromContent is above or to the left of toContent.
         val newOffset =
@@ -344,6 +346,7 @@ private class DragControllerImpl(
                     delta
                 }
 
+                projectedDistance?.velocityProjectionMillis != null -> desiredOffset
                 distance > 0f -> desiredOffset.fastCoerceIn(0f, distance)
                 else -> desiredOffset.fastCoerceIn(distance, 0f)
             }

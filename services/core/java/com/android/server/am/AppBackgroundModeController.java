@@ -82,9 +82,6 @@ final class AppBackgroundModeController {
     private final SparseArray<ArrayMap<String, Integer>> mModesByUser = new SparseArray<>();
     private final SparseBooleanArray mIgnoreTaskRemovalByUser = new SparseBooleanArray();
     private final SparseIntArray mEffectiveUidModes = new SparseIntArray();
-    // Process-scoped leases; never written into the user's saved background modes.
-    private final SparseArray<ArraySet<Integer>> mOcrDownloadProcesses = new SparseArray<>();
-
     // All fields below are accessed on mHandler, except where explicitly synchronized.
     private final SparseArray<Runnable> mPendingFreezes = new SparseArray<>();
     private final SparseArray<Runnable> mBinderProtectionTimeouts = new SparseArray<>();
@@ -246,32 +243,8 @@ final class AppBackgroundModeController {
         return shouldKeepTaskAlive(app.getApplicationUid());
     }
 
-    void onOcrDownloadForegroundChanged(int applicationUid, int processId, boolean active) {
-        if (processId <= 0) return;
-        final boolean changed;
-        synchronized (mLock) {
-            ArraySet<Integer> processes = mOcrDownloadProcesses.get(applicationUid);
-            if (active) {
-                if (processes == null) {
-                    processes = new ArraySet<>();
-                    mOcrDownloadProcesses.put(applicationUid, processes);
-                }
-                changed = processes.add(processId);
-            } else {
-                changed = processes != null && processes.remove(processId);
-                if (processes != null && processes.isEmpty()) {
-                    mOcrDownloadProcesses.remove(applicationUid);
-                }
-            }
-        }
-        if (changed && mSystemReady) {
-            mHandler.post(this::rebuildEffectiveModes);
-        }
-    }
-
     private boolean shouldKeepTaskAlive(int applicationUid) {
         synchronized (mLock) {
-            if (mOcrDownloadProcesses.contains(applicationUid)) return true;
             return AppBackgroundModeConfig.shouldIgnoreTaskRemoval(
                     mIgnoreTaskRemovalByUser.get(
                             UserHandle.getUserId(applicationUid), false),
@@ -282,7 +255,6 @@ final class AppBackgroundModeController {
 
     private int getUidMode(int uid) {
         synchronized (mLock) {
-            if (mOcrDownloadProcesses.contains(uid)) return AppBackgroundModeConfig.MODE_FULL;
             return mEffectiveUidModes.get(uid, AppBackgroundModeConfig.MODE_DEFAULT);
         }
     }
@@ -500,9 +472,6 @@ final class AppBackgroundModeController {
         final ArraySet<Integer> candidateUids = new ArraySet<>();
         synchronized (mLock) {
             previous = mEffectiveUidModes.clone();
-            for (int i = 0; i < mOcrDownloadProcesses.size(); i++) {
-                candidateUids.add(mOcrDownloadProcesses.keyAt(i));
-            }
             for (int userIndex = 0; userIndex < mModesByUser.size(); userIndex++) {
                 final int userId = mModesByUser.keyAt(userIndex);
                 final ArrayMap<String, Integer> modes = mModesByUser.valueAt(userIndex);
@@ -544,9 +513,6 @@ final class AppBackgroundModeController {
     }
 
     private int resolveUidMode(int uid) {
-        synchronized (mLock) {
-            if (mOcrDownloadProcesses.contains(uid)) return AppBackgroundModeConfig.MODE_FULL;
-        }
         final String[] packages = mPackageManager.getPackagesForUid(uid);
         if (packages == null || packages.length == 0) {
             return AppBackgroundModeConfig.MODE_DEFAULT;
@@ -1084,7 +1050,6 @@ final class AppBackgroundModeController {
             if (processId <= 0) {
                 return;
             }
-            onOcrDownloadForegroundChanged(applicationUid, processId, false);
             final boolean wasProtected;
             final boolean protectedNow;
             final boolean hasProcesses;

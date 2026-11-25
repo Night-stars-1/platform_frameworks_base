@@ -448,4 +448,7 @@ oneway interface IStatusBar
      * Toggles flashlight of the device
      */
     void toggleCameraFlash();
+
+    /** Opens Moment's application browser on the requested display for the current user. */
+    void showMomentAllApps(int displayId, int userId);
 }

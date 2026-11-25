@@ -16,22 +16,20 @@
 
 package com.android.server.wm;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.content.res.Configuration;
+import android.view.CompositionSamplingListener;
+import android.view.Display;
 import android.view.Surface.OutOfResourcesException;
 import android.view.SurfaceControl;
-import android.view.animation.PathInterpolator;
+
+import com.android.internal.dynamicanimation.animation.SpringAnimation;
 
 final class MomentHandleSurfaces {
 
-    private static final float PRESSED_WIDTH_SCALE = 76f / 108f;
-    private static final long PRESS_ANIMATION_DURATION_MS = 200;
-    private static final PathInterpolator PRESS_INTERPOLATOR =
-            new PathInterpolator(0f, 0f, 0.2f, 1f);
+    private static final float PRESSED_WIDTH_SCALE = 1.15f;
 
     private final Task mTask;
     private final float[] mBottomColor = new float[3];
@@ -40,13 +38,21 @@ final class MomentHandleSurfaces {
     private final RectF mTmpBounds = new RectF();
 
     private SurfaceControl mBottomSurface;
+    private SurfaceControl mBottomHalo;
     private SurfaceControl mTopSurface;
-    private ValueAnimator mPressAnimator;
+    private SpringAnimation mPressAnimator;
     private float mPressProgress;
     private boolean mDestroyed;
+    private boolean mDarkHandle;
+    private boolean mSamplingVisible;
+    private boolean mSampleScheduled;
+    private CompositionSamplingListener mSampler;
+    private final Runnable mSample = this::updateSampling;
 
     MomentHandleSurfaces(Task task) {
         mTask = task;
+        mDarkHandle = (task.mWmService.mContext.getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_YES;
     }
 
     synchronized void showOrUpdateBottom(SurfaceControl.Transaction t, Rect momentBounds) {
@@ -65,12 +71,17 @@ final class MomentHandleSurfaces {
         }
 
         mBottomBounds.set(momentBounds);
+        mSamplingVisible = true;
         applyBottomGeometry(t);
         t.reparent(mBottomSurface, parent)
                 .setColor(mBottomSurface, toColorArray(resolveBottomColor(), mBottomColor))
                 .setAlpha(mBottomSurface, 1f)
                 .setRelativeLayer(mBottomSurface, mTask.mSurfaceControl, 1)
                 .show(mBottomSurface);
+        if (!mSampleScheduled) {
+            mSampleScheduled = true;
+            mTask.mWmService.mAnimationHandler.postDelayed(mSample, 80);
+        }
     }
 
     void showOrUpdateTop(Rect momentBounds, float shapeProgress) {
@@ -112,11 +123,16 @@ final class MomentHandleSurfaces {
 
     synchronized void hideBottom(SurfaceControl.Transaction t) {
         mBottomBounds.setEmpty();
+        mSamplingVisible = false;
+        mTask.mWmService.mAnimationHandler.removeCallbacks(mSample);
+        mSampleScheduled = true;
+        mTask.mWmService.mAnimationHandler.post(mSample);
         mPressProgress = 0f;
         cancelPressAnimationLocked();
         if (mBottomSurface != null) {
             t.hide(mBottomSurface);
         }
+        if (mBottomHalo != null) t.hide(mBottomHalo);
     }
 
     void hideTop() {
@@ -130,6 +146,16 @@ final class MomentHandleSurfaces {
 
     synchronized void destroy(SurfaceControl.Transaction t) {
         mDestroyed = true;
+        mSamplingVisible = false;
+        mTask.mWmService.mAnimationHandler.removeCallbacks(mSample);
+        mTask.mWmService.mAnimationHandler.post(() -> {
+            synchronized (this) {
+                if (mSampler != null) {
+                    mSampler.destroy();
+                    mSampler = null;
+                }
+            }
+        });
         mBottomBounds.setEmpty();
         mPressProgress = 0f;
         cancelPressAnimationLocked();
@@ -143,38 +169,35 @@ final class MomentHandleSurfaces {
             mTopSurface.release();
             mTopSurface = null;
         }
+        if (mBottomHalo != null) {
+            t.remove(mBottomHalo);
+            mBottomHalo.release();
+            mBottomHalo = null;
+        }
     }
 
     private void startPressAnimation(boolean isTouchDown) {
-        final ValueAnimator previousAnimator;
-        synchronized (this) {
-            previousAnimator = mPressAnimator;
-            mPressAnimator = null;
-        }
-        if (previousAnimator != null) {
-            previousAnimator.cancel();
-        }
-
         synchronized (this) {
             if (mDestroyed || mBottomSurface == null || mBottomBounds.isEmpty()) {
                 return;
             }
             final float targetProgress = isTouchDown ? 1f : 0f;
+            if (mPressAnimator != null && mPressAnimator.isRunning()) {
+                mPressAnimator.animateToFinalPosition(targetProgress);
+                return;
+            }
             if (mPressProgress == targetProgress) {
                 return;
             }
-            final ValueAnimator animator = ValueAnimator.ofFloat(mPressProgress, targetProgress);
+            final SpringAnimation animator = MomentMotion.spring(mPressProgress, targetProgress,
+                    0f, MomentMotion.FAST_SPATIAL, 0.001f);
             mPressAnimator = animator;
-            animator.setDuration(PRESS_ANIMATION_DURATION_MS);
-            animator.setInterpolator(PRESS_INTERPOLATOR);
-            animator.addUpdateListener(animation -> applyPressAnimationFrame(animation));
-            animator.addListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    synchronized (MomentHandleSurfaces.this) {
-                        if (mPressAnimator == animation) {
-                            mPressAnimator = null;
-                        }
+            animator.addUpdateListener((animation, value, velocity) ->
+                    applyPressAnimationFrame(animator, value));
+            animator.addEndListener((animation, cancelled, value, velocity) -> {
+                synchronized (MomentHandleSurfaces.this) {
+                    if (mPressAnimator == animation) {
+                        mPressAnimator = null;
                     }
                 }
             });
@@ -182,12 +205,12 @@ final class MomentHandleSurfaces {
         }
     }
 
-    private synchronized void applyPressAnimationFrame(ValueAnimator animator) {
+    private synchronized void applyPressAnimationFrame(SpringAnimation animator, float value) {
         if (mPressAnimator != animator || mDestroyed || mBottomSurface == null
                 || !mBottomSurface.isValid() || mBottomBounds.isEmpty()) {
             return;
         }
-        mPressProgress = (float) animator.getAnimatedValue();
+        mPressProgress = value;
         try (SurfaceControl.Transaction t = mTask.mWmService.mTransactionFactory.get()) {
             applyBottomGeometry(t);
             t.apply();
@@ -195,9 +218,21 @@ final class MomentHandleSurfaces {
     }
 
     private void applyBottomGeometry(SurfaceControl.Transaction t) {
-        final float widthScale = 1f - (1f - PRESSED_WIDTH_SCALE) * mPressProgress;
+        final float progress = Math.max(0f, Math.min(1.2f, mPressProgress));
+        final float widthScale = 1f + (PRESSED_WIDTH_SCALE - 1f) * progress;
         MomentGeometry.getBottomHandleBounds(mBottomBounds, getDensity(), widthScale, mTmpBounds);
+        final float extraHeight = mTmpBounds.height() * .65f * progress / 2f;
+        mTmpBounds.inset(0f, -extraHeight);
         applySurfaceBounds(t, mBottomSurface, mTmpBounds);
+        if (mBottomHalo != null) {
+            final RectF halo = new RectF(mTmpBounds);
+            halo.inset(-getDensity(), -getDensity());
+            applySurfaceBounds(t, mBottomHalo, halo);
+            t.setColor(mBottomHalo, mDarkHandle ? new float[] {1f, 1f, 1f}
+                    : new float[] {0f, 0f, 0f})
+                    .setAlpha(mBottomHalo, .22f)
+                    .setRelativeLayer(mBottomHalo, mBottomSurface, -1).show(mBottomHalo);
+        }
     }
 
     private void applySurfaceBounds(SurfaceControl.Transaction t, SurfaceControl surface,
@@ -217,7 +252,7 @@ final class MomentHandleSurfaces {
     }
 
     private void cancelPressAnimationLocked() {
-        final ValueAnimator animator = mPressAnimator;
+        final SpringAnimation animator = mPressAnimator;
         mPressAnimator = null;
         if (animator != null) {
             mTask.mWmService.mAnimationHandler.post(animator::cancel);
@@ -230,6 +265,7 @@ final class MomentHandleSurfaces {
         }
         try {
             mBottomSurface = makeColorLayer(parent, "MomentBottomHandle#" + mTask.mTaskId);
+            mBottomHalo = makeColorLayer(parent, "MomentHandleContrast#" + mTask.mTaskId);
         } catch (OutOfResourcesException e) {
             mBottomSurface = null;
         }
@@ -264,7 +300,52 @@ final class MomentHandleSurfaces {
     }
 
     private int resolveBottomColor() {
-        return mTask.mWmService.mContext.getColor(android.R.color.system_accent1_100);
+        return mDarkHandle ? Color.rgb(24, 24, 24) : Color.rgb(248, 248, 248);
+    }
+
+    private synchronized void updateSampling() {
+        mSampleScheduled = false;
+        if (mDestroyed) return;
+        if (!mSamplingVisible || mBottomBounds.isEmpty()) {
+            if (mSampler != null) CompositionSamplingListener.unregister(mSampler);
+            return;
+        }
+        // Composition sampling currently supports only the default display. Other displays
+        // retain the theme fallback plus a small opposite-tone backing, without screenshots.
+        if (mTask.getDisplayId() != Display.DEFAULT_DISPLAY || mBottomHalo == null
+                || !mBottomHalo.isValid()) return;
+        if (mSampler == null) {
+            mSampler = new CompositionSamplingListener(
+                    command -> mTask.mWmService.mAnimationHandler.post(command)) {
+                @Override
+                public void onSampleCollected(float luma) {
+                    applySample(luma);
+                }
+            };
+        }
+        final RectF visual = new RectF();
+        MomentGeometry.getBottomHandleBounds(mBottomBounds, getDensity(), 1f, visual);
+        visual.inset(0, -4f * getDensity());
+        final Rect sample = new Rect();
+        visual.roundOut(sample);
+        if (!sample.intersect(0, 0,
+                mTask.mWmService.mContext.getResources().getDisplayMetrics().widthPixels,
+                mTask.mWmService.mContext.getResources().getDisplayMetrics().heightPixels)) return;
+        CompositionSamplingListener.register(mSampler, Display.DEFAULT_DISPLAY, mBottomHalo, sample);
+    }
+
+    private synchronized void applySample(float luma) {
+        if (mDestroyed || !mSamplingVisible || !Float.isFinite(luma)) return;
+        // Wide hysteresis prevents black/white chatter while moving over textured content.
+        final boolean dark = mDarkHandle ? luma >= .35f : luma > .55f;
+        if (dark == mDarkHandle) return;
+        mDarkHandle = dark;
+        if (mBottomSurface == null || !mBottomSurface.isValid()) return;
+        try (SurfaceControl.Transaction t = mTask.mWmService.mTransactionFactory.get()) {
+            t.setColor(mBottomSurface, toColorArray(resolveBottomColor(), mBottomColor));
+            applyBottomGeometry(t);
+            t.apply();
+        }
     }
 
     private float getDensity() {

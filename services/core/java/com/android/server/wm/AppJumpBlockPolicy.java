@@ -17,6 +17,10 @@
 package com.android.server.wm;
 
 import android.annotation.Nullable;
+import android.app.UwuAppPolicyManager;
+import android.content.Context;
+import android.os.Binder;
+import android.os.Bundle;
 import android.app.ActivityTaskManager;
 import android.content.ComponentName;
 import android.os.Environment;
@@ -67,6 +71,7 @@ final class AppJumpBlockPolicy {
     private static final long BYPASS_TOKEN_TIMEOUT_MILLIS = 24 * 60 * 60 * 1000L;
 
     private final Object mLock = new Object();
+    private final Object mPolicyRefreshLock = new Object();
 
     @GuardedBy("mLock")
     private final SparseArray<UserPolicyState> mPoliciesByUser = new SparseArray<>();
@@ -80,13 +85,67 @@ final class AppJumpBlockPolicy {
     @GuardedBy("mLock")
     private final ArrayMap<String, BypassAuthorization> mBypassAuthorizations = new ArrayMap<>();
 
-    AppJumpBlockPolicy() {
-    }
+    private final Context mContext;
+    @GuardedBy("mLock")
+    private final SparseArray<Bundle> mAppOpPoliciesByUser = new SparseArray<>();
+    @GuardedBy("mPolicyRefreshLock")
+    private boolean mWatching;
+
+    AppJumpBlockPolicy(Context context) { mContext = context; }
 
     void preloadUser(int userId) {
-        synchronized (mLock) {
-            getPolicyLocked(userId);
+        synchronized (mPolicyRefreshLock) { preloadUserSerialized(userId); }
+    }
+
+    private void preloadUserSerialized(int userId) {
+        if (userId < 0) return;
+        if (!mWatching) {
+            UwuAppPolicyManager.watch(mContext, BackgroundThread.getHandler(), UwuAppPolicyManager.FEATURE_JUMP,
+                    this::preloadUser);
+            mWatching = true;
         }
+        final UserPolicyState legacyState;
+        synchronized (mLock) { legacyState = new UserPolicyState(getPolicyLocked(userId)); }
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            Bundle snapshot = UwuAppPolicyManager.snapshot(userId);
+            if (!UwuAppPolicyManager.migrated(snapshot, UwuAppPolicyManager.FEATURE_JUMP)) {
+                Bundle legacy = new Bundle();
+                addLegacyModes(legacy, legacyState.allowedSourcePackages, 3, 1);
+                addLegacyModes(legacy, legacyState.blockedSourcePackages, 3, 2);
+                addLegacyModes(legacy, legacyState.allowedTargetPackages, 4, 1);
+                addLegacyModes(legacy, legacyState.blockedTargetPackages, 4, 2);
+                UwuAppPolicyManager.migrate(userId, UwuAppPolicyManager.FEATURE_JUMP, legacy);
+                snapshot = UwuAppPolicyManager.snapshot(userId);
+            }
+            synchronized (mLock) { mAppOpPoliciesByUser.put(userId, snapshot); }
+        } finally { Binder.restoreCallingIdentity(identity); }
+    }
+
+    private void notifyPolicyChanged(int userId) {
+        BackgroundThread.getHandler().post(() -> mContext.getContentResolver().notifyChange(
+                android.net.Uri.parse("content://org.uwuaosp.settingsext.apppolicies"), null,
+                false, userId));
+    }
+
+    private static void addLegacyModes(Bundle legacy, ArraySet<String> packages, int type,
+            int mode) {
+        for (String name : packages) {
+            int[] values = legacy.getIntArray(name);
+            if (values == null) values = UwuAppPolicyManager.defaults();
+            values[type] = mode;
+            legacy.putIntArray(name, values);
+        }
+    }
+
+    private void setAppOpPolicy(int userId, String name, int type, int mode) {
+        long identity = Binder.clearCallingIdentity();
+        try {
+            synchronized (mPolicyRefreshLock) {
+                UwuAppPolicyManager.setPolicy(name, userId, type, mode);
+                preloadUser(userId);
+            }
+        } finally { Binder.restoreCallingIdentity(identity); }
     }
 
     void setEnabled(int userId, boolean enabled) {
@@ -95,6 +154,7 @@ final class AppJumpBlockPolicy {
             policy.enabled = enabled;
             scheduleWriteLocked(userId, policy);
         }
+        notifyPolicyChanged(userId);
     }
 
     boolean isEnabled(int userId) {
@@ -142,6 +202,8 @@ final class AppJumpBlockPolicy {
     void removePackage(int userId, String packageName) {
         synchronized (mLock) {
             final UserPolicyState policy = getPolicyLocked(userId);
+            Bundle projection = mAppOpPoliciesByUser.get(userId);
+            if (projection != null) projection.remove(packageName);
             policy.allowedSourcePackages.remove(packageName);
             policy.blockedSourcePackages.remove(packageName);
             policy.allowedTargetPackages.remove(packageName);
@@ -170,6 +232,7 @@ final class AppJumpBlockPolicy {
     void removeUser(int userId) {
         final AtomicFile configFile;
         synchronized (mLock) {
+            mAppOpPoliciesByUser.remove(userId);
             mPoliciesByUser.remove(userId);
             configFile = mConfigFilesByUser.get(userId);
             mConfigFilesByUser.remove(userId);
@@ -191,36 +254,76 @@ final class AppJumpBlockPolicy {
     }
 
     void setSourceMode(int userId, String sourcePackage, int mode) {
-        synchronized (mLock) {
-            final UserPolicyState policy = getPolicyLocked(userId);
-            setPackageModeLocked(policy.allowedSourcePackages, policy.blockedSourcePackages,
-                    sourcePackage, mode);
-            scheduleWriteLocked(userId, policy);
-        }
+        setAppOpPolicy(userId, sourcePackage, UwuAppPolicyManager.JUMP_SOURCE, mode);
     }
 
     int getSourceMode(int userId, String sourcePackage) {
         synchronized (mLock) {
-            final UserPolicyState policy = getPolicyLocked(userId);
-            return getPackageModeLocked(policy.allowedSourcePackages,
-                    policy.blockedSourcePackages, sourcePackage);
+            Bundle snapshot = mAppOpPoliciesByUser.get(userId);
+            return snapshot == null ? ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK
+                    : UwuAppPolicyManager.policy(snapshot, sourcePackage,
+                            UwuAppPolicyManager.JUMP_SOURCE);
         }
     }
 
     void setTargetMode(int userId, String targetPackage, int mode) {
-        synchronized (mLock) {
-            final UserPolicyState policy = getPolicyLocked(userId);
-            setPackageModeLocked(policy.allowedTargetPackages, policy.blockedTargetPackages,
-                    targetPackage, mode);
-            scheduleWriteLocked(userId, policy);
-        }
+        setAppOpPolicy(userId, targetPackage, UwuAppPolicyManager.JUMP_TARGET, mode);
     }
 
     int getTargetMode(int userId, String targetPackage) {
         synchronized (mLock) {
-            final UserPolicyState policy = getPolicyLocked(userId);
-            return getPackageModeLocked(policy.allowedTargetPackages,
-                    policy.blockedTargetPackages, targetPackage);
+            Bundle snapshot = mAppOpPoliciesByUser.get(userId);
+            return snapshot == null ? ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK
+                    : UwuAppPolicyManager.policy(snapshot, targetPackage,
+                            UwuAppPolicyManager.JUMP_TARGET);
+        }
+    }
+
+    int getPairRuleCount(int userId, String packageName) {
+        synchronized (mLock) {
+            UserPolicyState policy = getPolicyLocked(userId);
+            int count = 0;
+            for (int i = 0; i < policy.pairModesBySourcePackage.size(); i++) {
+                ArrayMap<String, Integer> rules = policy.pairModesBySourcePackage.valueAt(i);
+                count += packageName.equals(policy.pairModesBySourcePackage.keyAt(i))
+                        ? rules.size() : rules.containsKey(packageName) ? 1 : 0;
+            }
+            return count;
+        }
+    }
+
+    int getPermissionMode(int userId, String packageName) {
+        synchronized (mLock) {
+            UserPolicyState policy = getPolicyLocked(userId);
+            if (!policy.enabled) return ActivityTaskManager.APP_JUMP_SOURCE_MODE_ALLOW;
+            Bundle snapshot = mAppOpPoliciesByUser.get(userId);
+            if (snapshot == null) {
+                throw new IllegalStateException("App policies not initialized");
+            }
+            int source = UwuAppPolicyManager.policy(
+                    snapshot, packageName, UwuAppPolicyManager.JUMP_SOURCE);
+            int target = UwuAppPolicyManager.policy(
+                    snapshot, packageName, UwuAppPolicyManager.JUMP_TARGET);
+            if (source == ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK
+                    || target == ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK) {
+                return ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK;
+            }
+            boolean asks = source == ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK
+                    || target == ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK;
+            for (int i = 0; i < policy.pairModesBySourcePackage.size(); i++) {
+                boolean isSource = packageName.equals(policy.pairModesBySourcePackage.keyAt(i));
+                ArrayMap<String, Integer> rules = policy.pairModesBySourcePackage.valueAt(i);
+                for (int j = 0; j < rules.size(); j++) {
+                    if (!isSource && !packageName.equals(rules.keyAt(j))) continue;
+                    int mode = rules.valueAt(j);
+                    if (mode == ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK) {
+                        return ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK;
+                    }
+                    asks |= mode == ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK;
+                }
+            }
+            return asks ? ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK
+                    : ActivityTaskManager.APP_JUMP_SOURCE_MODE_ALLOW;
         }
     }
 
@@ -255,6 +358,7 @@ final class AppJumpBlockPolicy {
             }
             scheduleWriteLocked(userId, policy);
         }
+        notifyPolicyChanged(userId);
     }
 
     int getPairMode(int userId, String sourcePackage, String targetPackage) {
@@ -429,28 +533,6 @@ final class AppJumpBlockPolicy {
                 CONFIG_FILE_NAME), "app-jump-policy");
         mConfigFilesByUser.put(userId, configFile);
         return configFile;
-    }
-
-    private static void setPackageModeLocked(ArraySet<String> allowedPackages,
-            ArraySet<String> blockedPackages, String packageName, int mode) {
-        allowedPackages.remove(packageName);
-        blockedPackages.remove(packageName);
-        if (mode == ActivityTaskManager.APP_JUMP_SOURCE_MODE_ALLOW) {
-            allowedPackages.add(packageName);
-        } else if (mode == ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK) {
-            blockedPackages.add(packageName);
-        }
-    }
-
-    private static int getPackageModeLocked(ArraySet<String> allowedPackages,
-            ArraySet<String> blockedPackages, String packageName) {
-        if (allowedPackages.contains(packageName)) {
-            return ActivityTaskManager.APP_JUMP_SOURCE_MODE_ALLOW;
-        }
-        if (blockedPackages.contains(packageName)) {
-            return ActivityTaskManager.APP_JUMP_SOURCE_MODE_BLOCK;
-        }
-        return ActivityTaskManager.APP_JUMP_SOURCE_MODE_ASK;
     }
 
     private static void readPackageTagIntoSet(TypedXmlPullParser parser, ArraySet<String> targetSet) {

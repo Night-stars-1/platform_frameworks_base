@@ -19,10 +19,17 @@ package com.android.wm.shell.windowdecor
 import android.animation.ValueAnimator
 import android.annotation.DimenRes
 import android.content.Context
+import android.content.res.Configuration
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.util.AttributeSet
 import android.widget.ImageButton
 import com.android.wm.shell.R
+import com.android.wm.shell.common.split.SplitScreenUtils
 import com.android.wm.shell.windowdecor.extension.getDimensionPixelSize
+import kotlin.math.min
 
 /**
  * [ImageButton] for the handle at the top of fullscreen apps. Has custom hover and press handling
@@ -30,6 +37,93 @@ import com.android.wm.shell.windowdecor.extension.getDimensionPixelSize
  */
 class HandleImageButton(context: Context?, attrs: AttributeSet?) : ImageButton(context, attrs) {
     private val handleAnimator = ValueAnimator()
+    private val dotsPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val dotsPath = Path()
+
+    private val displayResources =
+        this.context.display?.let { this.context.createDisplayContext(it).resources } ?: resources
+
+    // Use the display configuration: a narrow split on a tablet is still a tablet.
+    internal val usesTabletMenuMotion: Boolean
+        get() = SplitScreenUtils.isLargeScreen(displayResources)
+
+    internal var tabletMenuAnimationOwner: TabletHandleMenuMotion? = null
+    internal var tabletJoinProgress = 0f
+        set(value) {
+            field = value.coerceIn(0f, 1f)
+            invalidate()
+        }
+
+    internal val tabletHandleColor: Int
+        get() {
+            val color = context.getColor(com.android.internal.R.color.materialColorOnSurface)
+            val dark =
+                resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                    Configuration.UI_MODE_NIGHT_YES
+            return if (dark) {
+                Color.argb(
+                    (Color.alpha(color) * 0.68f).toInt(),
+                    Color.red(color),
+                    Color.green(color),
+                    Color.blue(color),
+                )
+            } else color
+        }
+
+    override fun onDraw(canvas: Canvas) {
+        if (!usesTabletMenuMotion) {
+            super.onDraw(canvas)
+            return
+        }
+        val density = resources.displayMetrics.density
+        val dot = TabletHandleMenuMotion.DOT_SIZE * density
+        val line = TabletHandleMenuMotion.LINE_WIDTH * density
+        val lineHeight = TabletHandleMenuMotion.LINE_HEIGHT * density
+        val height = dot + (lineHeight - dot) * tabletJoinProgress
+        val startSpan = TabletHandleMenuMotion.DOT_SPACING * density
+        val endSpan = min(line / 2 - dot / 2, startSpan)
+        val span = startSpan + (endSpan - startSpan) * tabletJoinProgress
+        val centerWidth = dot + (line - dot) * tabletJoinProgress
+        val radius = height / 2
+        val cx = width / 2f
+        val top = (this.height - height) / 2f
+        dotsPath.rewind()
+        dotsPath.addRoundRect(
+            cx - span - dot / 2,
+            top,
+            cx - span + dot / 2,
+            top + height,
+            radius,
+            radius,
+            Path.Direction.CW,
+        )
+        dotsPath.addRoundRect(
+            cx - centerWidth / 2,
+            top,
+            cx + centerWidth / 2,
+            top + height,
+            radius,
+            radius,
+            Path.Direction.CW,
+        )
+        dotsPath.addRoundRect(
+            cx + span - dot / 2,
+            top,
+            cx + span + dot / 2,
+            top + height,
+            radius,
+            radius,
+            Path.Direction.CW,
+        )
+        // One fill composites overlaps before applying the dark-theme translucency.
+        dotsPaint.color = tabletHandleColor
+        canvas.drawPath(dotsPath, dotsPaint)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        invalidate()
+    }
 
     /** Final horizontal padding for hover enter. */
     private val HANDLE_HOVER_ENTER_PADDING =
@@ -70,6 +164,7 @@ class HandleImageButton(context: Context?, attrs: AttributeSet?) : ImageButton(c
     }
 
     private fun animateHandle(duration: Long, endPadding: Int) {
+        if (usesTabletMenuMotion) return
         if (handleAnimator.isRunning) {
             handleAnimator.cancel()
             handleAnimator.removeAllListeners()

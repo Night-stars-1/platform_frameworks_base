@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.unit.Dp
@@ -75,6 +76,7 @@ import com.android.systemui.plugins.keyguard.ui.composable.elements.LockscreenSc
 import com.android.systemui.res.R
 import com.android.systemui.shade.ShadeDisplayAware
 import com.android.systemui.shade.shared.model.ShadeMode
+import com.android.systemui.util.Utils
 import com.google.errorprone.annotations.CompileTimeConstant
 import javax.inject.Inject
 
@@ -414,7 +416,7 @@ constructor(
             modifier: Modifier = Modifier
         ) {
             TwoColumn(modifier) {
-                StartColumn {
+                StartColumn(modifier = Modifier.padding(top = notificationColumnTopPadding())) {
                     MediaCarousel(Modifier.align(Alignment.Start))
                     Notifications(aodAlignment = Alignment.TopStart)
                 }
@@ -441,7 +443,9 @@ constructor(
         ) {
             TwoColumn(modifier) {
                 StartColumn(useLargeClockPadding = true) { LockscreenElement(Region.Clock.Large) }
-                EndColumn { Notifications(aodAlignment = Alignment.TopEnd) }
+                EndColumn(modifier = Modifier.padding(top = notificationColumnTopPadding())) {
+                    Notifications(aodAlignment = Alignment.TopEnd)
+                }
             }
         }
 
@@ -451,7 +455,7 @@ constructor(
         ) {
             TwoColumn(modifier) {
                 StartColumn(useLargeClockPadding = true) { LockscreenElement(Region.Clock.Large) }
-                EndColumn {
+                EndColumn(modifier = Modifier.padding(top = notificationColumnTopPadding())) {
                     MediaCarousel(Modifier.align(Alignment.End))
                     Notifications(aodAlignment = Alignment.TopEnd)
                 }
@@ -467,7 +471,9 @@ constructor(
                     LockscreenElement(Region.Clock.Small)
                     MediaCarousel(Modifier.align(Alignment.Start))
                 }
-                EndColumn { Notifications(aodAlignment = Alignment.TopEnd) }
+                EndColumn(modifier = Modifier.padding(top = notificationColumnTopPadding())) {
+                    Notifications(aodAlignment = Alignment.TopEnd)
+                }
             }
         }
 
@@ -477,11 +483,22 @@ constructor(
         ) {
             TwoColumn(modifier) {
                 StartColumn { LockscreenElement(Region.Clock.Small) }
-                EndColumn {
+                EndColumn(modifier = Modifier.padding(top = notificationColumnTopPadding())) {
                     MediaCarousel(Modifier.align(Alignment.End))
                     Notifications(aodAlignment = Alignment.TopEnd)
                 }
             }
+        }
+
+        @Composable
+        private fun notificationColumnTopPadding(): Dp {
+            val statusBarHeight =
+                with(LocalDensity.current) { Utils.getStatusBarHeaderHeightKeyguard(context).toDp() }
+            // The upper region already starts below the status bar.
+            return max(
+                0.dp,
+                dimensionResource(R.dimen.keyguard_split_shade_top_margin) - statusBarHeight,
+            )
         }
 
         @Immutable

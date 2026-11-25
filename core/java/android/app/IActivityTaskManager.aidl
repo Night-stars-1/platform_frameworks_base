@@ -446,4 +446,7 @@ interface IActivityTaskManager {
      * {@code originalPackageName} if no redirection is found.
      */
     String getDestinationPackage(in String originalPackageName);
+
+    int getAppJumpPairRuleCount(in String packageName, int userId);
+    int getAppJumpPermissionMode(in String packageName, int userId);
 }

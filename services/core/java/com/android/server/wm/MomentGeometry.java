@@ -18,7 +18,6 @@ package com.android.server.wm;
 
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.view.animation.PathInterpolator;
 
 final class MomentGeometry {
 
@@ -36,8 +35,6 @@ final class MomentGeometry {
     static final int COMPACT_DISMISS_TARGET_SIZE_DP = 96;
     static final float CLOSE_MORPH_FRACTION = 0.72f;
 
-    private static final PathInterpolator TASK_TRANSFORM_INTERPOLATOR =
-            new PathInterpolator(0.2f, 0f, 0f, 1f);
 
     private MomentGeometry() {
     }
@@ -58,7 +55,7 @@ final class MomentGeometry {
 
     static void getBottomHandleBounds(Rect momentBounds, float density, float widthScale,
             RectF outBounds) {
-        final float baseWidth = Math.max(1f, momentBounds.width() / 2f);
+        final float baseWidth = Math.max(1f, momentBounds.width() / 3f);
         final float width = Math.max(1f, baseWidth * widthScale);
         final float height = getBottomHandleHeight(momentBounds.width(), density);
         final float centerX = momentBounds.exactCenterX();
@@ -105,10 +102,9 @@ final class MomentGeometry {
     }
 
     static void evaluateCloseMorph(Rect startBounds, float taskScale, float density,
-            float progress, MorphFrame outFrame) {
-        progress = Math.max(0f, Math.min(1f, progress));
-        final float morphProgress = TASK_TRANSFORM_INTERPOLATOR.getInterpolation(
-                Math.min(1f, progress / CLOSE_MORPH_FRACTION));
+            float progress, float effects, MorphFrame outFrame) {
+        progress = MomentMotion.clamp(progress);
+        final float morphProgress = Math.min(1f, progress / CLOSE_MORPH_FRACTION);
         final float shrinkProgress = progress <= CLOSE_MORPH_FRACTION ? 0f
                 : (progress - CLOSE_MORPH_FRACTION) / (1f - CLOSE_MORPH_FRACTION);
         final float targetWidth = Math.max(1f, startBounds.width() / 2f);
@@ -123,7 +119,27 @@ final class MomentGeometry {
         outFrame.height = lerp(startBounds.height(), targetHeight, morphProgress);
         outFrame.cornerRadius = lerp(getCornerRadius(density) * taskScale,
                 targetHeight / 2f, morphProgress);
-        outFrame.alpha = 1f - shrinkProgress * shrinkProgress;
+        // Independent non-bouncy effects. Keep the container legible through the morph,
+        // then dissolve the final handle instead of bouncing an almost invisible window.
+        outFrame.alpha = 1f - MomentMotion.clamp((effects - 0.65f) / 0.35f);
+    }
+
+    static void evaluateOpenMorph(Rect endBounds, float taskScale, float density,
+            float spatial, float effects, MorphFrame outFrame) {
+        final float startHeight = getBottomHandleHeight(endBounds.width(), density);
+        final float startWidth = endBounds.width() / 2f;
+        outFrame.centerX = endBounds.exactCenterX();
+        outFrame.centerY = lerp(endBounds.bottom
+                + dpToPx(density, HANDLE_AREA_HEIGHT_DP) / 2f,
+                endBounds.exactCenterY(), MomentMotion.clamp(spatial));
+        // The task is hidden during this color-layer morph. A restrained size overshoot
+        // provides expression without non-uniformly stretching application content.
+        final float growth = Math.max(0f, Math.min(1.02f, spatial));
+        outFrame.width = Math.max(1f, lerp(startWidth, endBounds.width(), growth));
+        outFrame.height = Math.max(1f, lerp(startHeight, endBounds.height(), growth));
+        outFrame.cornerRadius = lerp(startHeight / 2f,
+                getCornerRadius(density) * taskScale, growth);
+        outFrame.alpha = MomentMotion.clamp(effects);
     }
 
     private static float lerp(float start, float end, float progress) {

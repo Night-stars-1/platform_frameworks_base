@@ -193,6 +193,8 @@ constructor(
     /** How much the bouncer UI should be scaled. */
     val scale: StateFlow<Float> = bouncerInteractor.scale
 
+    val tabletPinPosition = bouncerInteractor.tabletPinPosition
+
     /** Bouncer background color */
     val backgroundColor by
         windowRootViewBlurInteractor.isBlurCurrentlySupported

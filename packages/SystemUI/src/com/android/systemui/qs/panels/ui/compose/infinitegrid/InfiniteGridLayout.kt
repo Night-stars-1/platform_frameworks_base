@@ -53,6 +53,9 @@ import com.android.systemui.qs.pipeline.shared.TileSpec
 import com.android.systemui.qs.shared.ui.QuickSettings.Elements.toElementKey
 import com.android.systemui.res.R
 import com.android.systemui.shade.shared.flag.DualShadeFlag
+import com.android.systemui.shade.ui.composable.DualShadeMotion
+import com.android.systemui.shade.ui.composable.LocalDualShadeMotion
+import com.android.systemui.shade.ui.composable.dualShadePart
 import javax.inject.Inject
 import kotlinx.coroutines.launch
 
@@ -108,26 +111,54 @@ constructor(
         // recomposition (the squish value itself is read while drawing, not while composing).
         val squishinessState = rememberUpdatedState(squishiness)
         val squishinessProvider = remember { { squishinessState.value } }
-        val textFeedback = remember(textFeedbackViewModel) {
-            textFeedbackViewModel::requestShowFeedback
-        }
+        val textFeedback =
+            remember(textFeedbackViewModel) { textFeedbackViewModel::requestShowFeedback }
 
         val bounceables =
             remember(sizedTiles) { List(sizedTiles.size) { BounceableTileViewModel() } }
         val spans by remember(sizedTiles) { derivedStateOf { sizedTiles.fastMap { it.width } } }
+        val dualShadeMotion = LocalDualShadeMotion.current
+        val rows =
+            remember(spans, columns) {
+                var row = 0
+                var used = 0
+                spans.map { span ->
+                    if (used + span > columns) {
+                        row++
+                        used = 0
+                    }
+                    val current = row
+                    used += span
+                    if (used == columns) {
+                        row++
+                        used = 0
+                    }
+                    current
+                }
+            }
         VerticalSpannedGrid(
             columns = columns,
-            columnSpacing = dimensionResource(R.dimen.qs_tile_margin_horizontal),
-            rowSpacing = dimensionResource(R.dimen.qs_tile_margin_vertical),
+            columnSpacing =
+                if (dualShadeMotion != null) DualShadeMotion.TileSpacing
+                else dimensionResource(R.dimen.qs_tile_margin_horizontal),
+            rowSpacing =
+                if (dualShadeMotion != null) DualShadeMotion.TileSpacing
+                else dimensionResource(R.dimen.qs_tile_margin_vertical),
             spans = spans,
             keys = { sizedTiles[it].tile.spec },
             modifier = modifier,
         ) { spanIndex, column, isFirstInColumn, isLastInColumn ->
             val it = sizedTiles[spanIndex]
 
+            // Scene coordinates describe the resting tile; only its contents carry the effect.
             Element(it.tile.spec.toElementKey(), Modifier) {
                 Tile(
                     tile = it.tile,
+                    modifier =
+                        Modifier.dualShadePart(
+                            rank = 2f + rows[spanIndex] + column * 0.08f,
+                            key = it.tile.spec,
+                        ),
                     // The circular style shows a label under every tile, so no tile is icon only.
                     iconOnly = !circular && iconTilesViewModel.isIconTile(it.tile.spec),
                     circular = circular,
@@ -146,7 +177,7 @@ constructor(
                     detailsViewModel = detailsViewModel,
                     isVisible = listening,
                     requestToggleTextFeedback = textFeedback,
-                    enableRevealEffect = enableRevealEffect,
+                    enableRevealEffect = enableRevealEffect && dualShadeMotion == null,
                 )
             }
         }

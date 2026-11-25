@@ -1038,7 +1038,7 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
         mIntentFirewall = intentFirewall;
         final File systemDir = SystemServiceManager.ensureSystemDir();
         mAppWarnings = createAppWarnings(mUiContext, mH, mUiHandler, systemDir);
-        mAppJumpBlockPolicy = new AppJumpBlockPolicy();
+        mAppJumpBlockPolicy = new AppJumpBlockPolicy(mContext);
         mCompatModePackages = new CompatModePackages(this, systemDir, mH);
         mPendingIntentController = intentController;
         mActivityStateUpdater = processStateController.createActivityStateAsyncUpdater(looper);
@@ -2698,6 +2698,25 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
         final int callingUid = Binder.getCallingUid();
         userId = handleIncomingUser(callingPid, callingUid, userId, "setAppJumpPairMode()");
         mAppJumpBlockPolicy.setPairMode(userId, sourcePackage, targetPackage, mode);
+    }
+
+    @Override
+    public int getAppJumpPairRuleCount(String packageName, int userId) {
+        enforceManageAppJumpCaller("getAppJumpPairRuleCount()");
+        userId = handleIncomingUser(Binder.getCallingPid(), Binder.getCallingUid(), userId,
+                "getAppJumpPairRuleCount()");
+        return mAppJumpBlockPolicy.getPairRuleCount(userId, packageName);
+    }
+
+    @Override
+    public int getAppJumpPermissionMode(String packageName, int userId) {
+        enforceManageAppJumpCaller("getAppJumpPermissionMode()");
+        if (packageName == null || packageName.isEmpty()) {
+            throw new IllegalArgumentException("packageName must not be empty");
+        }
+        userId = handleIncomingUser(Binder.getCallingPid(), Binder.getCallingUid(), userId,
+                "getAppJumpPermissionMode()");
+        return mAppJumpBlockPolicy.getPermissionMode(userId, packageName);
     }
 
     @Override

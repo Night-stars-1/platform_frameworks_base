@@ -107,7 +107,8 @@ private fun ContentScope.BouncerOverlay(
     val backgroundColor = viewModel.backgroundColor
 
     DisposableEffect(Unit) { onDispose { viewModel.onUiDestroyed() } }
-    val containerLayout = calculateContainerLayout()
+    // Tablet gesture positions are relative to the screen, not a centered container.
+    val containerLayout = if (usesTabletPinLayout(viewModel)) null else calculateContainerLayout()
     val isContainerized = containerLayout != null
     val insets = WindowInsets.navigationBars.union(WindowInsets.ime)
     Box(

@@ -24,9 +24,6 @@ import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL;
 
 import static com.android.server.wm.MomentGeometry.COMPACT_DISMISS_TARGET_SIZE_DP;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -41,9 +38,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 
-import com.android.internal.dynamicanimation.animation.FloatValueHolder;
 import com.android.internal.dynamicanimation.animation.SpringAnimation;
-import com.android.internal.dynamicanimation.animation.SpringForce;
 
 final class MomentCompactDismissWindow {
 
@@ -52,7 +47,6 @@ final class MomentCompactDismissWindow {
     private static final int TARGET_BOTTOM_MARGIN_DP = 50;
     private static final float MAGNET_RADIUS_MULTIPLIER = 1.25f;
     private static final float MAGNETIZED_TARGET_SCALE = 1.15f;
-    private static final long SHOW_HIDE_DURATION_MS = 200;
 
     private final Context mContext;
     private final Task mTask;
@@ -211,8 +205,9 @@ final class MomentCompactDismissWindow {
         private float mCircleTranslationY;
         private float mMagnetProgress;
         private boolean mShowing;
-        private ValueAnimator mScrimAnimator;
+        private SpringAnimation mScrimAnimator;
         private SpringAnimation mCircleSpring;
+        private Runnable mCircleEndAction;
 
         DismissView(Context context) {
             super(context);
@@ -255,6 +250,7 @@ final class MomentCompactDismissWindow {
         }
 
         void cancelAnimations() {
+            mCircleEndAction = null;
             if (mScrimAnimator != null) {
                 mScrimAnimator.cancel();
                 mScrimAnimator = null;
@@ -266,36 +262,36 @@ final class MomentCompactDismissWindow {
         }
 
         private void animateScrimTo(float target) {
-            if (mScrimAnimator != null) {
-                mScrimAnimator.cancel();
+            if (mScrimAnimator != null && mScrimAnimator.isRunning()) {
+                mScrimAnimator.animateToFinalPosition(target);
+                return;
             }
-            mScrimAnimator = ValueAnimator.ofFloat(mScrimAlpha, target);
-            mScrimAnimator.setDuration(SHOW_HIDE_DURATION_MS);
-            mScrimAnimator.addUpdateListener(animation -> {
-                mScrimAlpha = (float) animation.getAnimatedValue();
+            mScrimAnimator = MomentMotion.spring(mScrimAlpha, target, 0f,
+                    MomentMotion.DEFAULT_EFFECTS, 0.001f);
+            mScrimAnimator.addUpdateListener((animation, value, velocity) -> {
+                mScrimAlpha = MomentMotion.clamp(value);
                 invalidate();
             });
-            final ValueAnimator animator = mScrimAnimator;
-            animator.addListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    if (mScrimAnimator == animator) {
-                        mScrimAnimator = null;
-                    }
+            final SpringAnimation animator = mScrimAnimator;
+            animator.addEndListener((animation, cancelled, value, velocity) -> {
+                if (mScrimAnimator == animator) {
+                    mScrimAnimator = null;
                 }
             });
             mScrimAnimator.start();
         }
 
         private void animateCircleTo(float target, Runnable endAction) {
-            if (mCircleSpring != null) {
-                mCircleSpring.cancel();
+            mCircleEndAction = endAction;
+            final MomentMotion.Spec spec = mShowing
+                    ? MomentMotion.DEFAULT_SPATIAL : MomentMotion.EXIT_SPATIAL;
+            if (mCircleSpring != null && mCircleSpring.isRunning()) {
+                mCircleSpring.getSpring().setDampingRatio(spec.damping)
+                        .setStiffness(spec.stiffness);
+                mCircleSpring.animateToFinalPosition(target);
+                return;
             }
-            mCircleSpring = new SpringAnimation(
-                    new FloatValueHolder(mCircleTranslationY), target)
-                    .setSpring(new SpringForce(target)
-                            .setStiffness(SpringForce.STIFFNESS_LOW)
-                            .setDampingRatio(SpringForce.DAMPING_RATIO_LOW_BOUNCY));
+            mCircleSpring = MomentMotion.spring(mCircleTranslationY, target, 0f, spec, 0.5f);
             mCircleSpring.addUpdateListener((animation, value, velocity) -> {
                 mCircleTranslationY = value;
                 invalidate();
@@ -304,8 +300,10 @@ final class MomentCompactDismissWindow {
             spring.addEndListener((animation, canceled, value, velocity) -> {
                 if (mCircleSpring == spring) {
                     mCircleSpring = null;
-                    if (!canceled && endAction != null) {
-                        endAction.run();
+                    final Runnable finish = mCircleEndAction;
+                    mCircleEndAction = null;
+                    if (!canceled && finish != null) {
+                        finish.run();
                     }
                 }
             });

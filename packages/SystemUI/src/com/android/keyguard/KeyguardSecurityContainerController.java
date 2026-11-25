@@ -493,6 +493,7 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
     @Nullable
     private Job mSceneTransitionCollectionJob;
     private Job mBlurEnabledCollectionJob;
+    private Job mTabletPinPositionCollectionJob;
 
     @Inject
     public KeyguardSecurityContainerController(KeyguardSecurityContainer view,
@@ -592,6 +593,15 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
 
         showPrimarySecurityScreen(false);
 
+        if (getResources().getConfiguration().smallestScreenWidthDp >= 600) {
+            mTabletPinPositionCollectionJob =
+                    mJavaAdapter
+                            .get()
+                            .alwaysCollectFlow(
+                                    mBouncerInteractor.get().getTabletPinPosition(),
+                                    mView::setTabletPinPosition);
+        }
+
         if (SceneContainerFlag.isEnabled()) {
             // When the scene framework says that the lockscreen has been dismissed, dismiss the
             // keyguard here, revealing the underlying app or launcher:
@@ -647,6 +657,11 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
         if (mSceneTransitionCollectionJob != null) {
             mSceneTransitionCollectionJob.cancel(null);
             mSceneTransitionCollectionJob = null;
+        }
+
+        if (mTabletPinPositionCollectionJob != null) {
+            mTabletPinPositionCollectionJob.cancel(null);
+            mTabletPinPositionCollectionJob = null;
         }
 
         if (mBlurEnabledCollectionJob != null) {
@@ -1214,12 +1229,18 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
                 });
     }
 
+    private boolean isTabletPinBouncer() {
+        return mCurrentSecurityMode == SecurityMode.PIN
+                && getResources().getConfiguration().smallestScreenWidthDp >= 600;
+    }
+
     /**
      * Returns whether the given security view should be used in a "one handed" way. This can be
      * used to change how the security view is drawn (e.g. take up less of the screen, and align to
      * one side).
      */
     private boolean canUseOneHandedBouncer() {
+        if (isTabletPinBouncer()) return true;
         return switch (mCurrentSecurityMode) {
             case PIN, Pattern, SimPin, SimPuk -> getResources().getBoolean(
                     R.bool.can_use_one_handed_bouncer);
@@ -1232,6 +1253,11 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
     }
 
     private void configureMode() {
+        boolean tabletPin = isTabletPinBouncer();
+        if (tabletPin) {
+            mView.setTabletPinPosition(mBouncerInteractor.get().getTabletPinPosition().getValue());
+        }
+        mView.setTabletPinPositionEnabled(tabletPin);
         boolean useSimSecurity = mCurrentSecurityMode == SimPin
                 || mCurrentSecurityMode == SimPuk;
         int mode = KeyguardSecurityContainer.MODE_DEFAULT;

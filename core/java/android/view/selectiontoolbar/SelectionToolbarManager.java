@@ -20,12 +20,11 @@ import static android.permission.flags.Flags.systemSelectionToolbarEnabled;
 
 import android.annotation.NonNull;
 import android.annotation.SystemService;
+import android.app.AppOpsManager;
 import android.content.Context;
+import android.os.Process;
 import android.os.RemoteException;
 import android.provider.Settings;
-
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.util.Objects;
 
@@ -104,25 +103,21 @@ public final class SelectionToolbarManager {
                 Settings.Secure.UWU_APP_CLIPBOARD_PROMPTS_ENABLED, 0) != 0) {
             return true;
         }
-        final String[] settings = {
-                Settings.Secure.UWU_APP_CLIPBOARD_POLICIES,
-                Settings.Secure.UWU_APP_CLIPBOARD_READ_POLICIES,
-                Settings.Secure.UWU_APP_CLIPBOARD_WRITE_POLICIES,
-        };
-        for (String setting : settings) {
-            final String value = Settings.Secure.getString(context.getContentResolver(), setting);
-            if (value == null || value.isBlank()) {
-                continue;
-            }
-            try {
-                final int policy = new JSONObject(value).optInt(context.getPackageName(),
-                        Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ALLOW);
-                if (policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_ASK
-                        || policy == Settings.Secure.UWU_APP_CLIPBOARD_POLICY_DENY) {
-                    return true;
-                }
-            } catch (JSONException ignored) {
-                // Match ClipboardService: malformed settings do not create a rule.
+        final AppOpsManager manager = context.getSystemService(
+                AppOpsManager.class);
+        final int[] accessOps = {AppOpsManager.OP_UWU_READ_CLIPBOARD,
+                AppOpsManager.OP_UWU_WRITE_CLIPBOARD};
+        final int[] promptOps = {AppOpsManager.OP_UWU_CLIPBOARD_READ_PROMPT,
+                AppOpsManager.OP_UWU_CLIPBOARD_WRITE_PROMPT};
+        for (int index = 0; index < accessOps.length; index++) {
+            int mode = manager.unsafeCheckOpRawNoThrow(accessOps[index], Process.myUid(),
+                    context.getOpPackageName());
+            if (mode != AppOpsManager.MODE_ALLOWED
+                    && mode != AppOpsManager.MODE_DEFAULT) return true;
+            if (mode == AppOpsManager.MODE_DEFAULT
+                    && manager.unsafeCheckOpRawNoThrow(promptOps[index], Process.myUid(),
+                            context.getOpPackageName()) == AppOpsManager.MODE_ALLOWED) {
+                return true;
             }
         }
         return false;

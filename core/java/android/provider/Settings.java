@@ -13435,6 +13435,13 @@ public final class Settings {
         public static final String MOMENT_ENABLED = "moment_enabled";
 
         /**
+         * Whether Moment uses a fixed 16:9 content ratio instead of the device ratio.
+         * @hide
+         */
+        @Readable
+        public static final String MOMENT_FIXED_ASPECT_RATIO = "moment_fixed_aspect_ratio";
+
+        /**
          * Whether the bottom-corner gesture for MomentArc is enabled.
          * <p>Type: int (0 for false, 1 for true)
          *

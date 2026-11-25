@@ -71,6 +71,7 @@ import com.android.systemui.qs.panels.ui.viewmodel.toolbar.PowerMenuToggleButton
 import com.android.systemui.qs.panels.ui.viewmodel.toolbar.ToolbarViewModel
 import com.android.systemui.qs.ui.compose.borderOnFocus
 import com.android.systemui.res.R
+import com.android.systemui.shade.ui.composable.dualShadePart
 
 @Composable
 fun Toolbar(
@@ -86,7 +87,7 @@ fun Toolbar(
         )
 
         if (viewModel.useInlinePowerMenu) {
-            Box {
+            Box(Modifier.dualShadePart(rank = 0.36f, key = "toolbarPower")) {
                 PowerMenuToggleButton(
                     viewModel = viewModel.powerMenuToggleButtonUiState,
                     modifier = Modifier.sysuiResTag("pm_lite"),
@@ -101,7 +102,9 @@ fun Toolbar(
         } else {
             IconButton(
                 model = viewModel.powerButtonViewModel,
-                modifier = Modifier.sysuiResTag("pm_lite"),
+                modifier =
+                    Modifier.sysuiResTag("pm_lite")
+                        .dualShadePart(rank = 0.36f, key = "toolbarPower"),
             )
         }
     }
@@ -117,7 +120,7 @@ private fun StandardToolbarLayout(
         // User switcher button
         IconButton(
             model = viewModel.userSwitcherViewModel,
-            Modifier.sysuiResTag("multi_user_switch"),
+            Modifier.sysuiResTag("multi_user_switch").dualShadePart(rank = 0f, key = "toolbarUser"),
             iconColor = Color.Unspecified,
             useIconColorProtection = true,
         )
@@ -125,24 +128,34 @@ private fun StandardToolbarLayout(
         // Edit mode button
         val editModeButtonViewModel =
             rememberViewModel("Toolbar") { viewModel.editModeButtonViewModelFactory.create() }
-        EditModeButton(editModeButtonViewModel, isVisible = isFullyVisible())
+        EditModeButton(
+            editModeButtonViewModel,
+            isVisible = isFullyVisible(),
+            modifier = Modifier.dualShadePart(rank = 0.12f, key = "toolbarEdit"),
+        )
 
         // Settings button
         IconButton(
             model = viewModel.settingsButtonViewModel,
-            modifier = Modifier.sysuiResTag("settings_button_container"),
+            modifier =
+                Modifier.sysuiResTag("settings_button_container")
+                    .dualShadePart(rank = 0.24f, key = "toolbarSettings"),
         )
 
         // Security info button
         SecurityInfo(
             viewModel = viewModel.securityInfoViewModel,
             showCollapsed = true,
+            modifier = Modifier.dualShadePart(rank = 0.36f, key = "toolbarSecurity"),
         )
 
         // Text feedback chip / build number
         ToolbarTextFeedback(
             viewModelFactory = viewModel.textFeedbackContentViewModelFactory,
-            modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
+            modifier =
+                Modifier.weight(1f)
+                    .align(Alignment.CenterVertically)
+                    .dualShadePart(rank = 0.48f, key = "toolbarFeedback"),
         )
     }
 }

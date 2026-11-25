@@ -101,6 +101,7 @@ import com.android.systemui.Flags;
 import com.android.systemui.FontStyles;
 import com.android.systemui.Gefingerpoken;
 import com.android.systemui.bouncer.domain.interactor.BouncerInteractor;
+import com.android.systemui.bouncer.shared.model.TabletPinPosition;
 import com.android.systemui.bouncer.ui.BouncerColors;
 import com.android.systemui.classifier.Classifier;
 import com.android.systemui.classifier.FalsingA11yDelegate;
@@ -190,6 +191,8 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
      */
     private @Mode int mCurrentMode = MODE_UNINITIALIZED;
     private int mWidth = -1;
+    private boolean mUseTabletPinPosition;
+    private TabletPinPosition mTabletPinPosition = TabletPinPosition.CENTER;
 
     /**
      * This callback is used to animate KeyguardSecurityContainer and its child views based on
@@ -433,15 +436,69 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
      * that the user last interacted with.
      */
     void updatePositionByTouchX(float x) {
-        mViewMode.updatePositionByTouchX(x);
+        if (!mUseTabletPinPosition) {
+            mViewMode.updatePositionByTouchX(x);
+        }
+    }
+
+    void setTabletPinPositionEnabled(boolean enabled) {
+        if (mUseTabletPinPosition != enabled) {
+            mUseTabletPinPosition = enabled;
+            mViewMode.updateSecurityViewLocation();
+        }
+    }
+
+    void setTabletPinPosition(TabletPinPosition position) {
+        if (mTabletPinPosition != position) {
+            mTabletPinPosition = position;
+            if (mUseTabletPinPosition) {
+                mViewMode.updateSecurityViewLocation();
+            }
+        }
+    }
+
+    private boolean applyTabletPinPosition() {
+        if (!mUseTabletPinPosition) return false;
+        ConstraintSet constraints = new ConstraintSet();
+        constraints.clone(this);
+        int inputId = mSecurityViewFlipper.getId();
+        constrainTabletPinColumn(
+                constraints, inputId, 0.5f, mTabletPinPosition.getHorizontalBias());
+        View userSwitcher = findViewById(R.id.keyguard_bouncer_user_switcher);
+        if (userSwitcher != null) {
+            constrainTabletPinColumn(
+                    constraints,
+                    userSwitcher.getId(),
+                    mTabletPinPosition == TabletPinPosition.CENTER ? 0.25f : 0.5f,
+                    mTabletPinPosition == TabletPinPosition.LEFT ? 1f : 0f);
+        }
+        constraints.applyTo(this);
+        return true;
+    }
+
+    private static void constrainTabletPinColumn(
+            ConstraintSet constraints, int id, float width, float horizontalBias) {
+        constraints.clear(id, START);
+        constraints.clear(id, END);
+        constraints.connect(id, LEFT, PARENT_ID, LEFT);
+        constraints.connect(id, RIGHT, PARENT_ID, RIGHT);
+        constraints.connect(id, TOP, PARENT_ID, TOP);
+        constraints.connect(id, BOTTOM, PARENT_ID, BOTTOM);
+        constraints.constrainWidth(id, MATCH_CONSTRAINT);
+        constraints.constrainHeight(id, MATCH_CONSTRAINT);
+        constraints.constrainDefaultWidth(id, ConstraintSet.MATCH_CONSTRAINT_PERCENT);
+        constraints.constrainPercentWidth(id, width);
+        constraints.setHorizontalBias(id, horizontalBias);
     }
 
     public boolean isSidedSecurityMode() {
-        return mViewMode instanceof SidedSecurityMode;
+        return mViewMode instanceof SidedSecurityMode
+                && (!mUseTabletPinPosition || mTabletPinPosition != TabletPinPosition.CENTER);
     }
 
     /** Returns whether the inner SecurityViewFlipper is left-aligned when in sided mode. */
     public boolean isSecurityLeftAligned() {
+        if (mUseTabletPinPosition) return mTabletPinPosition == TabletPinPosition.LEFT;
         return mViewMode instanceof SidedSecurityMode
                 && ((SidedSecurityMode) mViewMode).isLeftAligned();
     }
@@ -451,7 +508,8 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
      * sided mode.
      */
     public boolean isTouchOnTheOtherSideOfSecurity(MotionEvent ev) {
-        return mViewMode instanceof SidedSecurityMode
+        return !mUseTabletPinPosition
+                && mViewMode instanceof SidedSecurityMode
                 && ((SidedSecurityMode) mViewMode).isTouchOnTheOtherSideOfSecurity(ev);
     }
 
@@ -883,6 +941,9 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
     /** Handles density or font scale changes. */
     void onDensityOrFontScaleChanged() {
         mViewMode.onDensityOrFontScaleChanged();
+        if (mUseTabletPinPosition) {
+            mViewMode.updateSecurityViewLocation();
+        }
     }
 
     void resetScale() {
@@ -975,7 +1036,7 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
          */
         @Override
         public void handleDoubleTap(MotionEvent event) {
-            if (mDisableDoubleClickSwap) {
+            if (mDisableDoubleClickSwap || isTabletPinPositionEnabled()) {
                 return;
             }
             boolean currentlyLeftAligned = isLeftAligned();
@@ -1001,6 +1062,16 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
 
         public boolean isTouchOnTheOtherSideOfSecurity(MotionEvent ev) {
             return isTouchOnTheOtherSideOfSecurity(ev, isLeftAligned());
+        }
+
+        private boolean isTabletPinPositionEnabled() {
+            return mView instanceof KeyguardSecurityContainer
+                    && ((KeyguardSecurityContainer) mView).mUseTabletPinPosition;
+        }
+
+        protected boolean applyTabletPinPosition() {
+            return mView instanceof KeyguardSecurityContainer
+                    && ((KeyguardSecurityContainer) mView).applyTabletPinPosition();
         }
 
         protected abstract void updateSecurityViewLocation(boolean leftAlign, boolean animate);
@@ -1357,6 +1428,7 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
         }
 
         public void updateSecurityViewLocation(boolean leftAlign, boolean animate) {
+            if (applyTabletPinPosition()) return;
             if (animate) {
                 TransitionManager.beginDelayedTransition(mView,
                         new KeyguardSecurityViewTransition());
@@ -1468,6 +1540,7 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
         }
 
         protected void updateSecurityViewLocation(boolean leftAlign, boolean animate) {
+            if (applyTabletPinPosition()) return;
             if (animate) {
                 TransitionManager.beginDelayedTransition(mView,
                         new KeyguardSecurityViewTransition());

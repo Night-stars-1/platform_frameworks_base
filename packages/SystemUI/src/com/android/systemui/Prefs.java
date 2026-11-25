@@ -75,9 +75,15 @@ public final class Prefs {
             Key.HAS_DISMISSED_NUDGE_TO_SETUP_DREAM,
             Key.HAS_ACCESSIBILITY_FLOATING_MENU_TUCKED,
             Key.BLUETOOTH_TILE_DIALOG_CONTENT_HEIGHT,
+            Key.DUAL_SHADE_QUICK_SETTINGS_SCROLL,
+            Key.DUAL_SHADE_NOTIFICATIONS_SCROLL,
+            Key.DUAL_SHADE_QUICK_SETTINGS_PAGE,
     })
     // TODO: annotate these with their types so {@link PrefsCommandLine} can know how to set them
     public @interface Key {
+        String DUAL_SHADE_QUICK_SETTINGS_SCROLL = "DualShadeQuickSettingsScroll";
+        String DUAL_SHADE_NOTIFICATIONS_SCROLL = "DualShadeNotificationsScroll";
+        String DUAL_SHADE_QUICK_SETTINGS_PAGE = "DualShadeQuickSettingsPage";
         @Deprecated
         String OVERVIEW_LAST_STACK_TASK_ACTIVE_TIME = "OverviewLastStackTaskActiveTime";
         String DEBUG_MODE_ENABLED = "debugModeEnabled";

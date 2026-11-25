@@ -60,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.Layout
@@ -90,6 +91,7 @@ import com.android.compose.animation.scene.ElementKey
 import com.android.compose.animation.scene.LowestZIndexContentPicker
 import com.android.compose.animation.scene.SceneTransitionLayoutState
 import com.android.compose.animation.scene.ValueKey
+import com.android.compose.animation.scene.animateContentColorAsState
 import com.android.compose.animation.scene.animateElementFloatAsState
 import com.android.compose.animation.scene.content.state.TransitionState
 import com.android.compose.modifiers.thenIf
@@ -111,6 +113,7 @@ import com.android.systemui.shade.ui.composable.ShadeHeader.Values.ClockScale
 import com.android.systemui.shade.ui.viewmodel.ShadeHeaderViewModel
 import com.android.systemui.statusbar.phone.StatusBarLocation
 import com.android.systemui.statusbar.phone.domain.interactor.IsAreaDark
+import com.android.systemui.statusbar.pipeline.battery.shared.ui.BatteryColors
 import com.android.systemui.statusbar.pipeline.battery.ui.composable.BatteryWithEstimate
 import com.android.systemui.statusbar.pipeline.mobile.StatusBarMobileIconKairos
 import com.android.systemui.statusbar.pipeline.mobile.ui.MobileViewLogger
@@ -149,6 +152,10 @@ object ShadeHeader {
 
     object Values {
         val ClockScale = ValueKey("ShadeHeaderClockScale")
+        val NotificationsChipBackground = ValueKey("DualShadeNotificationsChipBackground")
+        val NotificationsChipForeground = ValueKey("DualShadeNotificationsChipForeground")
+        val QuickSettingsChipBackground = ValueKey("DualShadeQuickSettingsChipBackground")
+        val QuickSettingsChipForeground = ValueKey("DualShadeQuickSettingsChipForeground")
     }
 
     object Dimensions {
@@ -395,6 +402,27 @@ fun ContentScope.OverlayShadeHeader(
     showClock: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    // Use the panel transition directly; a second color spring would lag behind the swipe.
+    val notificationsBackground by
+        animateContentColorAsState(
+            notificationsHighlight.backgroundColor,
+            ShadeHeader.Values.NotificationsChipBackground,
+        )
+    val notificationsForeground by
+        animateContentColorAsState(
+            notificationsHighlight.foregroundColor,
+            ShadeHeader.Values.NotificationsChipForeground,
+        )
+    val quickSettingsBackground by
+        animateContentColorAsState(
+            quickSettingsHighlight.backgroundColor,
+            ShadeHeader.Values.QuickSettingsChipBackground,
+        )
+    val quickSettingsForeground by
+        animateContentColorAsState(
+            quickSettingsHighlight.foregroundColor,
+            ShadeHeader.Values.QuickSettingsChipForeground,
+        )
     val horizontalPadding =
         maxOf(
             LocalScreenCornerRadius.current / 2f,
@@ -409,8 +437,9 @@ fun ContentScope.OverlayShadeHeader(
         startContent = {
             Box(modifier = Modifier.layoutId(ShadeHeader.LayoutId.StartContent)) {
                 ShadeHighlightChip(
-                    backgroundColor = notificationsHighlight.backgroundColor,
+                    backgroundColor = notificationsBackground,
                     hoverBackgroundColor = notificationsHighlight.hoverBackgroundColor,
+                    animateColorChanges = false,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     onClick = viewModel::onNotificationIconChipClicked,
                     clickTargetModifier =
@@ -427,12 +456,12 @@ fun ContentScope.OverlayShadeHeader(
                         ),
                 ) {
                     if (showClock) {
-                        Clock(textColor = notificationsHighlight.foregroundColor)
+                        Clock(textColor = notificationsForeground)
                     }
                     VariableDayDate(
                         longerDateText = viewModel.longerDateText,
                         shorterDateText = viewModel.shorterDateText,
-                        textColor = notificationsHighlight.foregroundColor,
+                        textColor = notificationsForeground,
                     )
                 }
             }
@@ -444,8 +473,9 @@ fun ContentScope.OverlayShadeHeader(
                 modifier = Modifier.layoutId(ShadeHeader.LayoutId.EndContent),
             ) {
                 ShadeHighlightChip(
-                    backgroundColor = quickSettingsHighlight.backgroundColor,
+                    backgroundColor = quickSettingsBackground,
                     hoverBackgroundColor = quickSettingsHighlight.hoverBackgroundColor,
+                    animateColorChanges = false,
                     onClick = viewModel::onSystemIconChipClicked,
                     clickTargetModifier =
                         Modifier.fillMaxHeight().padding(horizontal = horizontalPadding),
@@ -465,14 +495,16 @@ fun ContentScope.OverlayShadeHeader(
                         viewModel = viewModel,
                         useExpandedFormat = false,
                         modifier = Modifier.padding(end = paddingEnd).weight(1f, fill = false),
-                        foregroundColor = quickSettingsHighlight.foregroundColor.toArgb(),
-                        backgroundColor = quickSettingsHighlight.backgroundColor.toArgb(),
+                        foregroundColor = quickSettingsForeground.toArgb(),
+                        backgroundColor = quickSettingsBackground.toArgb(),
                     )
                     BatteryInfo(
                         viewModel = viewModel,
                         showIcon = true,
                         useExpandedFormat = false,
+                        textColor = quickSettingsForeground,
                         chipHighlightModel = quickSettingsHighlight,
+                        chipBackgroundColor = quickSettingsBackground,
                     )
                 }
                 if (!groupedPrivacyChip() && viewModel.isPrivacyChipVisible) {
@@ -688,6 +720,7 @@ private fun BatteryInfo(
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     chipHighlightModel: ChipHighlightModel? = null,
+    chipBackgroundColor: Color = Color.Transparent,
 ) {
     val isQuickSettingsDarkTheme = isSystemInDarkTheme()
     // `viewModel.isShadeAreaDark` does not account for when the shade is pulled down and scrim is
@@ -701,12 +734,20 @@ private fun BatteryInfo(
             ChipHighlightModel.Strong -> IsAreaDark { !isQuickSettingsDarkTheme }
             ChipHighlightModel.Weak -> IsAreaDark { isQuickSettingsDarkTheme }
         }
+    val glyphColor = chipBackgroundColor.compositeOver(MaterialTheme.colorScheme.surface)
+    val defaultColors =
+        if (chipHighlightModel != null) {
+            remember(textColor, glyphColor) { BatteryColors.ThemedDefault(textColor, glyphColor) }
+        } else {
+            null
+        }
     BatteryWithEstimate(
         viewModelFactory = viewModel.batteryViewModelFactory,
         isDarkProvider = { isDarkProvider },
         showIcon = showIcon,
         showEstimate = useExpandedFormat,
         textColor = textColor,
+        defaultColors = defaultColors,
         modifier = modifier.sysuiResTag(ShadeHeader.TestTags.BatteryTestTag),
     )
 }

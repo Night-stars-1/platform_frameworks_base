@@ -33,6 +33,7 @@ import com.android.internal.annotations.VisibleForTesting
 import com.android.internal.protolog.ProtoLog
 import com.android.wm.shell.protolog.ShellProtoLogGroup.WM_SHELL_WINDOW_DECORATION
 import com.android.wm.shell.shared.animation.Interpolators
+import com.android.wm.shell.windowdecor.HandleImageButton
 
 /** Animates the Desktop View's app handle. */
 class AppHandleAnimator(appHandleView: View, private val captionHandle: ImageButton) {
@@ -87,7 +88,10 @@ class AppHandleAnimator(appHandleView: View, private val captionHandle: ImageBut
     /** Animate appearance/disappearance of caption's handle. */
     fun animateCaptionHandleAlpha(startValue: Float, endValue: Float) {
         // DrawingHandle's alpha change is handled by HandleMenuAnimator.
-        if (DesktopExperienceFlags.ENABLE_DRAWING_APP_HANDLE.isTrue) {
+        if (
+            DesktopExperienceFlags.ENABLE_DRAWING_APP_HANDLE.isTrue ||
+                (captionHandle as? HandleImageButton)?.usesTabletMenuMotion == true
+        ) {
             return
         }
 

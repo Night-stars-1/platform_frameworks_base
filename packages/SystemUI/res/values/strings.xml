@@ -5064,6 +5064,7 @@
     <!-- MomentArc's in-window application browser. -->
     <string name="moment_arc_all_apps_title">All apps</string>
     <string name="moment_arc_apps_section">MomentArc</string>
+    <string name="moment_arc_back_all_apps">Back</string>
     <string name="moment_arc_launch_failed">Unable to open this app</string>
     <string name="moment_arc_apps_load_failed">Couldn\'t load apps. Tap to retry.</string>
     <string name="moment_arc_no_apps">No available apps</string>

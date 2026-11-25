@@ -160,20 +160,30 @@ private fun Int.scaledLevel(): Float {
  *
  * This icon is designed to be parameterized on the height. The only valid way to use it is by
  * explicitly setting `Modifier.height()`, and using `Modifier.wrapContentWidth()` together.
+ *
+ * @param defaultColors Optional themed colors for the normal state. Charging, power save, and error
+ *   states retain their own color profiles.
  */
 @Composable
 fun UnifiedBattery(
     viewModel: BatteryViewModel,
     isDarkProvider: () -> IsAreaDark,
     modifier: Modifier,
+    defaultColors: BatteryColors? = null,
 ) {
     var bounds by remember { mutableStateOf(Rect()) }
 
     val colorProvider = {
-        if (isDarkProvider().isDarkTheme(bounds)) {
-            viewModel.colorProfile.dark
-        } else {
-            viewModel.colorProfile.light
+        val colors =
+            if (isDarkProvider().isDarkTheme(bounds)) {
+                viewModel.colorProfile.dark
+            } else {
+                viewModel.colorProfile.light
+            }
+        when (colors) {
+            BatteryColors.LightTheme.Default,
+            BatteryColors.DarkTheme.Default -> defaultColors ?: colors
+            else -> colors
         }
     }
 
