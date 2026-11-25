@@ -296,7 +296,7 @@ public class IslandContentView extends LinearLayout {
         mGap = new View(context);
         mRight = new LinearLayout(context);
         mRight.setOrientation(HORIZONTAL);
-        mRight.setGravity(Gravity.CENTER_VERTICAL);
+        mRight.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         mRow.addView(mLeft);
         mRow.addView(mGap, new LayoutParams(0, mGapHeight));
         mRow.addView(mRight);
@@ -1525,8 +1525,10 @@ public class IslandContentView extends LinearLayout {
         mRight.removeAllViews();
         mLeft.setPadding(0, 0, 0, 0);
         mRight.setPadding(0, 0, 0, 0);
-        mLeft.setGravity(Gravity.CENTER_VERTICAL);
-        mRight.setGravity(Gravity.CENTER_VERTICAL);
+        // The sides are widened to the same width so the gap stays centred; the extra width goes
+        // between the content and the camera, so each side's content hugs its own pill edge.
+        mLeft.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        mRight.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         if (mPrimary == null) {
             mRow.setVisibility(GONE);
             return;
