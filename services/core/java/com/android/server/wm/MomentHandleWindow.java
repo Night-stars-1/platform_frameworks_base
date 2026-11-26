@@ -370,7 +370,8 @@ final class MomentHandleWindow {
             if (compact || interactionBlocked) {
                 mHandleMenu.collapseImmediately();
             }
-            if (!mCompact && compact) {
+            final boolean enteringCompact = !mCompact && compact;
+            if (enteringCompact) {
                 mCompactMotion.setValues(bounds.exactCenterX(), bounds.exactCenterY(), 0f,
                         false /* dispatch */);
                 mCompactDismissing = false;
@@ -387,6 +388,11 @@ final class MomentHandleWindow {
             updateTopHandleSurface();
             requestLayout();
             invalidate();
+            if (enteringCompact && !interactionBlocked && mCompactStashedSide == 0) {
+                // A freshly shrunk window slides to the nearer side instead of staying where the
+                // resize or the menu left it.
+                startCompactSnap(0f, 0f, false /* allowStash */, 0 /* preferredSide */);
+            }
         }
 
         void setMomentBounds(Rect bounds) {
@@ -866,25 +872,37 @@ final class MomentHandleWindow {
                         mCompactMagnetized = false;
                         getCompactDismissWindow().hide();
                         startCompactSnap(mCompactVelocityX, mCompactVelocityY,
-                                true /* allowStash */);
+                                true /* allowStash */, getCompactDragSide());
                     } else {
                         vibrate(VibrationEffect.EFFECT_HEAVY_CLICK);
                         post(this::startCompactDismiss);
                     }
                 } else {
                     startCompactSnap(mCompactVelocityX, mCompactVelocityY,
-                            true /* allowStash */);
+                            true /* allowStash */, getCompactDragSide());
                 }
             } else {
                 recycleCompactVelocityTracker();
                 cancelCompactMotion();
                 if (mCompactStashedSide != 0) {
-                    startCompactSnap(0f, 0f, false /* allowStash */);
+                    startCompactSnap(0f, 0f, false /* allowStash */, 0 /* preferredSide */);
                 } else {
                     mService.mMomentController.restoreMomentCompact(mTask);
                 }
             }
             mDragging = false;
+        }
+
+        /**
+         * Edge the user dragged toward: the side of the net horizontal movement since the gesture
+         * started, or 0 when it barely moved sideways.
+         */
+        private int getCompactDragSide() {
+            final float dx = mCompactDragCenterX - mStartCenterX;
+            if (Math.abs(dx) <= mTouchSlop) {
+                return 0;
+            }
+            return dx < 0f ? -1 : 1;
         }
 
         private void cancelCompactGesture() {
@@ -902,7 +920,13 @@ final class MomentHandleWindow {
                     false /* dispatch */);
         }
 
-        private void startCompactSnap(float velocityX, float velocityY, boolean allowStash) {
+        /**
+         * Settles the compact window. Unless it is being stashed, it always ends against the left
+         * or right edge: {@code preferredSide} picks the edge (-1 left, 1 right), and 0 uses the
+         * nearer one.
+         */
+        private void startCompactSnap(float velocityX, float velocityY, boolean allowStash,
+                int preferredSide) {
             final Rect movementBounds =
                     mService.mMomentController.getMomentCompactMovementBounds(mTask);
             if (movementBounds.isEmpty()) {
@@ -928,8 +952,9 @@ final class MomentHandleWindow {
                             || mCompactMotion.getCenterX()
                                     > movementBounds.right + compactWidth / 2f);
             if (velocityX == 0f) {
-                velocityX = mCompactMotion.getCenterX() < movementBounds.exactCenterX()
-                        ? -0.001f : 0.001f;
+                final boolean towardLeft = preferredSide != 0 ? preferredSide < 0
+                        : mCompactMotion.getCenterX() < movementBounds.exactCenterX();
+                velocityX = towardLeft ? -0.001f : 0.001f;
             }
             final int stashOffset = dpToPx(COMPACT_STASH_OFFSET_DP);
             final float leftStashX = movementBounds.left - compactWidth + stashOffset;
@@ -944,16 +969,21 @@ final class MomentHandleWindow {
             } else {
                 targetStashedSide = 0;
             }
+            final float edgeX;
+            if (preferredSide != 0) {
+                edgeX = preferredSide < 0 ? movementBounds.left : movementBounds.right;
+            } else {
+                edgeX = mCompactMotion.getCenterX() < movementBounds.exactCenterX()
+                        ? movementBounds.left : movementBounds.right;
+            }
             if ((stashLeft || stashRight) && !wasStashed) {
                 velocityY = 0f;
             }
             mCompactMagnetized = false;
             mCompactSpringingToTouch = false;
             getCompactDismissWindow().hide();
-            final float flingMinX = stashLeft || stashRight
-                    ? leftStashX : movementBounds.left;
-            final float flingMaxX = stashLeft || stashRight
-                    ? rightStashX : movementBounds.right;
+            final float flingMinX = stashLeft || stashRight ? leftStashX : edgeX;
+            final float flingMaxX = stashLeft || stashRight ? rightStashX : edgeX;
             mCompactMotion.flingThenSpring(flingMinX, flingMaxX, velocityX,
                     movementBounds.top, movementBounds.bottom, velocityY,
                     () -> {
