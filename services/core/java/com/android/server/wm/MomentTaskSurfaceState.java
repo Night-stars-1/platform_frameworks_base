@@ -43,6 +43,8 @@ final class MomentTaskSurfaceState {
     private boolean mResizing;
     private final DisplayFrames mPortraitDisplayFrames = new DisplayFrames();
     private final InsetsState mLastRawInsetsState = new InsetsState();
+    private float mTopBarFraction;
+    private float mBottomBarFraction;
 
     private float mScale;
     private boolean mHasUserCenter;
@@ -133,9 +135,25 @@ final class MomentTaskSurfaceState {
         mLayoutSnapshot = snapshot;
     }
 
+    /**
+     * Visible part of the task. Only the side system-bar insets are cropped: the app's own
+     * status-bar and navigation-bar backgrounds stay visible as the bands holding the handles.
+     */
     Rect getContentCrop() {
         updateBounds();
         return new Rect(mContentCrop);
+    }
+
+    /** Status-bar band height as a fraction of the displayed Moment height. */
+    float getTopBarFraction() {
+        updateBounds();
+        return mTopBarFraction;
+    }
+
+    /** Navigation-bar band height as a fraction of the displayed Moment height. */
+    float getBottomBarFraction() {
+        updateBounds();
+        return mBottomBarFraction;
     }
 
     Rect getFixedAspectRatioBounds(DisplayContent displayContent) {
@@ -161,8 +179,8 @@ final class MomentTaskSurfaceState {
         final Rect frame = frames.mInsetsState.getDisplayFrame();
         final Insets bars = frames.mInsetsState.calculateInsets(frame, frame,
                 systemBars(), true /* ignoreVisibility */);
-        // Reserve system-bar insets outside the fixed-ratio content. The existing crop then
-        // produces an actual 16:9 (or 9:16) visible app surface, not a shortened 16:9 task.
+        // Reserve system-bar insets outside the fixed-ratio content: the app content between
+        // the bars is an actual 16:9 (or 9:16) area, and the visible bar bands come on top.
         if (landscape) {
             final int contentHeight = Math.max(1, shortEdge - bars.top - bars.bottom);
             mFixedLayoutBounds.set(0, 0, Math.round(contentHeight * 16f / 9f)
@@ -296,6 +314,7 @@ final class MomentTaskSurfaceState {
             return "baseBounds=" + mBaseBounds
                     + " contentCrop=" + mContentCrop
                     + " surfaceBounds=" + mSurfaceBounds
+                    + " barFractions=" + mTopBarFraction + "/" + mBottomBarFraction
                     + " display=null";
         }
         final InsetsState rawInsetsState = displayContent.getInsetsStateController()
@@ -313,6 +332,7 @@ final class MomentTaskSurfaceState {
                 + " animatedCrop=" + mAnimatedCrop
                 + " fullscreenBounds=" + mFullscreenBounds
                 + " surfaceBounds=" + mSurfaceBounds
+                + " barFractions=" + mTopBarFraction + "/" + mBottomBarFraction
                 + " center=" + mCenter
                 + " scale=" + mScale
                 + " displayBounds=" + displayContent.getBounds()
@@ -396,7 +416,7 @@ final class MomentTaskSurfaceState {
         mCornerRadius = MomentGeometry.getCornerRadius(getDensity());
         applyTaskTransform(t);
         if (showHandle && !mMomentCompact && !mTransformAnimating && !mResizing) {
-            mHandleSurfaces.showOrUpdateBottom(t, getHandleBounds());
+            mHandleSurfaces.showOrUpdateBottom(t, getHandleBounds(), mBottomBarFraction);
         } else {
             mHandleSurfaces.hideBottom(t);
         }
@@ -678,6 +698,8 @@ final class MomentTaskSurfaceState {
         }
 
         mContentCrop.set(0, 0, mBaseBounds.width(), mBaseBounds.height());
+        mTopBarFraction = 0f;
+        mBottomBarFraction = 0f;
         mFullscreenBounds.set(displayBounds);
         if (displayContent != null) {
             final DisplayFrames portraitDisplayFrames = getPortraitDisplayFrames();
@@ -687,10 +709,13 @@ final class MomentTaskSurfaceState {
             final Rect displayFrame = insetsState.getDisplayFrame();
             final Insets systemBarInsets = insetsState.calculateInsets(displayFrame, displayFrame,
                     systemBars(), true /* ignoreVisibility */);
-            mContentCrop.inset(systemBarInsets.left, systemBarInsets.top,
-                    systemBarInsets.right, systemBarInsets.bottom);
+            mContentCrop.inset(systemBarInsets.left, 0, systemBarInsets.right, 0);
             if (mContentCrop.isEmpty()) {
                 mContentCrop.set(0, 0, mBaseBounds.width(), mBaseBounds.height());
+            }
+            if (systemBarInsets.top + systemBarInsets.bottom < mContentCrop.height()) {
+                mTopBarFraction = (float) systemBarInsets.top / mContentCrop.height();
+                mBottomBarFraction = (float) systemBarInsets.bottom / mContentCrop.height();
             }
         }
 

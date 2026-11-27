@@ -853,6 +853,8 @@ public class WindowManagerService extends IWindowManager.Stub
                 Settings.Secure.getUriFor(Settings.Secure.MOMENT_ENABLED);
         private final Uri mMomentFixedAspectRatioUri =
                 Settings.Secure.getUriFor(Settings.Secure.MOMENT_FIXED_ASPECT_RATIO);
+        private final Uri mMomentGestureStyleUri =
+                Settings.Secure.getUriFor(Settings.Secure.MOMENT_GESTURE_STYLE);
         private final Uri mPolicyControlUri =
                 Settings.Global.getUriFor(Settings.Global.POLICY_CONTROL);
         private final Uri mForceDesktopModeOnExternalDisplaysUri = Settings.Global.getUriFor(
@@ -894,6 +896,8 @@ public class WindowManagerService extends IWindowManager.Stub
             resolver.registerContentObserver(mMomentEnabledUri, false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(mMomentFixedAspectRatioUri, false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(mMomentGestureStyleUri, false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(mPolicyControlUri, false, this, UserHandle.USER_ALL);
             if (DesktopModeHelper.isDesktopExperienceDevOptionSupported(mContext)) {
@@ -970,6 +974,11 @@ public class WindowManagerService extends IWindowManager.Stub
             }
 
             if (mMomentFixedAspectRatioUri.equals(uri)) {
+                updateMomentEnabled();
+                return;
+            }
+
+            if (mMomentGestureStyleUri.equals(uri)) {
                 updateMomentEnabled();
                 return;
             }
@@ -1142,6 +1151,9 @@ public class WindowManagerService extends IWindowManager.Stub
             mMomentController.setFixedAspectRatioFromSettings(Settings.Secure.getIntForUser(
                     mContext.getContentResolver(), Settings.Secure.MOMENT_FIXED_ASPECT_RATIO, 0,
                     mCurrentUserId) != 0);
+            mMomentController.setGestureStyleFromSettings(Settings.Secure.getIntForUser(
+                    mContext.getContentResolver(), Settings.Secure.MOMENT_GESTURE_STYLE, 0,
+                    mCurrentUserId));
         }
     }
 
@@ -7215,6 +7227,35 @@ public class WindowManagerService extends IWindowManager.Stub
         } catch (IllegalStateException e) {
             Slog.d("MomentNavHandle", "Unable to handle double tap: " + e.getMessage());
             return false;
+        }
+    }
+
+    @Override
+    @EnforcePermission(android.Manifest.permission.STATUS_BAR)
+    public boolean convertTaskToMomentFromGesture(int taskId) {
+        convertTaskToMomentFromGesture_enforcePermission();
+        final int userId = mCurrentUserId;
+        if (!mMomentController.isEnabledForUser(userId)
+                || !mMomentController.isMiuiGestureStyle()) {
+            return false;
+        }
+        // The caller is authorized above; the conversion itself does system work such as
+        // relaunching the task, which must not run under the launcher's identity.
+        final long origId = Binder.clearCallingIdentity();
+        try {
+            synchronized (mGlobalLock) {
+                final Task task = mRoot.anyTaskForId(taskId);
+                if (task == null || task.isActivityTypeHome()) {
+                    return false;
+                }
+            }
+            mMomentController.convertTaskToMoment(taskId);
+            return true;
+        } catch (IllegalStateException e) {
+            Slog.d("MomentGesture", "Unable to convert task " + taskId + ": " + e.getMessage());
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(origId);
         }
     }
 

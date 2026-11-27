@@ -22,7 +22,8 @@ import android.graphics.RectF;
 final class MomentGeometry {
 
     static final int CORNER_RADIUS_DP = 28;
-    static final int HANDLE_AREA_HEIGHT_DP = 18;
+    static final int HANDLE_TOUCH_HEIGHT_DP = 32;
+    static final int CORNER_TOUCH_SIZE_DP = 40;
     static final int MIN_HANDLE_HEIGHT_DP = 2;
     static final int MAX_HANDLE_HEIGHT_DP = 5;
     static final float HANDLE_HEIGHT_WIDTH_RATIO = 0.015f;
@@ -53,56 +54,89 @@ final class MomentGeometry {
                         width * HANDLE_HEIGHT_WIDTH_RATIO));
     }
 
-    static void getBottomHandleBounds(Rect momentBounds, float density, float widthScale,
-            RectF outBounds) {
+    /**
+     * Displayed height of the app's own status bar (top) or navigation bar (bottom) band kept
+     * inside {@code momentBounds}. {@code barFraction} is the bar inset divided by the visible
+     * task height, so it stays valid for every scale of the same task.
+     */
+    static float getBarHeight(Rect momentBounds, float barFraction) {
+        return momentBounds.height() * barFraction;
+    }
+
+    /** Centers a handle in its bar; a bar thinner than the handle keeps it inside the window. */
+    private static float getBarCenterOffset(Rect momentBounds, float barFraction,
+            float handleHeight) {
+        return Math.max(getBarHeight(momentBounds, barFraction), handleHeight) / 2f;
+    }
+
+    static float getBottomHandleCenterY(Rect momentBounds, float bottomBarFraction,
+            float handleHeight) {
+        return momentBounds.bottom
+                - getBarCenterOffset(momentBounds, bottomBarFraction, handleHeight);
+    }
+
+    static void getBottomHandleBounds(Rect momentBounds, float bottomBarFraction, float density,
+            float widthScale, RectF outBounds) {
         final float baseWidth = Math.max(1f, momentBounds.width() / 3f);
         final float width = Math.max(1f, baseWidth * widthScale);
         final float height = getBottomHandleHeight(momentBounds.width(), density);
         final float centerX = momentBounds.exactCenterX();
-        final float centerY = momentBounds.bottom
-                + dpToPx(density, HANDLE_AREA_HEIGHT_DP) / 2f;
+        final float centerY = getBottomHandleCenterY(momentBounds, bottomBarFraction, height);
         outBounds.set(centerX - width / 2f, centerY - height / 2f,
                 centerX + width / 2f, centerY + height / 2f);
     }
 
-    static void getTopHandleBounds(Rect momentBounds, float density, float displayedCornerRadius,
+    /**
+     * Drag target covering the whole bottom bar. A bar thinner than a usable target grows it
+     * downward, outside the window, so application content never loses touches.
+     */
+    static void getBottomHandleTouchBounds(Rect momentBounds, float bottomBarFraction,
+            float density, Rect outBounds) {
+        final float barHeight = Math.max(getBarHeight(momentBounds, bottomBarFraction),
+                getBottomHandleHeight(momentBounds.width(), density));
+        final int top = momentBounds.bottom - Math.round(barHeight);
+        outBounds.set(momentBounds.left, top, momentBounds.right, Math.max(momentBounds.bottom,
+                top + Math.round(dpToPx(density, HANDLE_TOUCH_HEIGHT_DP))));
+    }
+
+    static void getTopHandleBounds(Rect momentBounds, float topBarFraction, float density,
             float shapeProgress, boolean includeCollapsedTouchTarget, RectF outBounds) {
         final float visualCollapsedWidth = Math.max(1f, momentBounds.width() / 6f);
-        final float collapsedWidth = includeCollapsedTouchTarget
-                ? Math.max(dpToPx(density, TOP_HANDLE_TOUCH_WIDTH_DP), visualCollapsedWidth)
-                : visualCollapsedWidth;
-        final float collapsedHeight = dpToPx(density, includeCollapsedTouchTarget
-                ? HANDLE_AREA_HEIGHT_DP : TOP_HANDLE_HEIGHT_DP);
+        final float visualCollapsedHeight = dpToPx(density, TOP_HANDLE_HEIGHT_DP);
+        final float collapsedWidth;
+        final float collapsedHeight;
+        final float collapsedCenterY;
+        if (includeCollapsedTouchTarget) {
+            // Wide enough to grab, but never over the top-corner resize targets.
+            collapsedWidth = Math.max(visualCollapsedWidth,
+                    Math.min(dpToPx(density, TOP_HANDLE_TOUCH_WIDTH_DP),
+                            momentBounds.width() - dpToPx(density, CORNER_TOUCH_SIZE_DP)));
+            // Cover the whole top bar; a thin bar grows the target upward, away from content.
+            final float bottom = momentBounds.top + Math.max(
+                    getBarHeight(momentBounds, topBarFraction), visualCollapsedHeight);
+            collapsedHeight = Math.max(bottom - momentBounds.top,
+                    dpToPx(density, HANDLE_TOUCH_HEIGHT_DP));
+            collapsedCenterY = bottom - collapsedHeight / 2f;
+        } else {
+            collapsedWidth = visualCollapsedWidth;
+            collapsedHeight = visualCollapsedHeight;
+            collapsedCenterY = momentBounds.top
+                    + getBarCenterOffset(momentBounds, topBarFraction, visualCollapsedHeight);
+        }
         final float expandedWidth = dpToPx(density, HANDLE_MENU_WIDTH_DP);
         final float expandedHeight = dpToPx(density, HANDLE_MENU_HEIGHT_DP);
-        final float collapsedCenterX = momentBounds.left + displayedCornerRadius
-                + visualCollapsedWidth / 2f;
-        final float expandedCenterX = momentBounds.exactCenterX();
-        final float collapsedCenterY = includeCollapsedTouchTarget
-                ? momentBounds.top - collapsedHeight / 2f
-                : momentBounds.top + collapsedHeight / 2f;
+        final float centerX = momentBounds.exactCenterX();
         final float expandedCenterY = momentBounds.top
                 - dpToPx(density, HANDLE_MENU_GAP_DP) - expandedHeight / 2f;
         final float width = lerp(collapsedWidth, expandedWidth, shapeProgress);
         final float height = lerp(collapsedHeight, expandedHeight, shapeProgress);
-        final float centerX = lerp(collapsedCenterX, expandedCenterX, shapeProgress);
         final float centerY = lerp(collapsedCenterY, expandedCenterY, shapeProgress);
         outBounds.set(centerX - width / 2f, centerY - height / 2f,
                 centerX + width / 2f, centerY + height / 2f);
     }
 
-    static float getDisplayedCornerRadius(Task task, Rect momentBounds, float density) {
-        final Rect taskBounds = task.getBounds();
-        if (taskBounds.isEmpty()) {
-            return getCornerRadius(density);
-        }
-        final float scaleX = (float) momentBounds.width() / taskBounds.width();
-        final float scaleY = (float) momentBounds.height() / taskBounds.height();
-        return getCornerRadius(density) * Math.min(scaleX, scaleY);
-    }
-
-    static void evaluateCloseMorph(Rect startBounds, float taskScale, float density,
-            float progress, float effects, MorphFrame outFrame) {
+    static void evaluateCloseMorph(Rect startBounds, float bottomBarFraction, float taskScale,
+            float density, float progress, float effects, MorphFrame outFrame) {
         progress = MomentMotion.clamp(progress);
         final float morphProgress = Math.min(1f, progress / CLOSE_MORPH_FRACTION);
         final float shrinkProgress = progress <= CLOSE_MORPH_FRACTION ? 0f
@@ -110,8 +144,8 @@ final class MomentGeometry {
         final float targetWidth = Math.max(1f, startBounds.width() / 2f);
         final float targetHeight = getBottomHandleHeight(startBounds.width(), density);
         final float targetCenterX = startBounds.exactCenterX();
-        final float targetCenterY = startBounds.bottom
-                + dpToPx(density, HANDLE_AREA_HEIGHT_DP) / 2f;
+        final float targetCenterY = getBottomHandleCenterY(startBounds, bottomBarFraction,
+                targetHeight);
         final float morphedWidth = lerp(startBounds.width(), targetWidth, morphProgress);
         outFrame.centerX = lerp(startBounds.exactCenterX(), targetCenterX, morphProgress);
         outFrame.centerY = lerp(startBounds.exactCenterY(), targetCenterY, morphProgress);
@@ -124,13 +158,12 @@ final class MomentGeometry {
         outFrame.alpha = 1f - MomentMotion.clamp((effects - 0.65f) / 0.35f);
     }
 
-    static void evaluateOpenMorph(Rect endBounds, float taskScale, float density,
-            float spatial, float effects, MorphFrame outFrame) {
+    static void evaluateOpenMorph(Rect endBounds, float bottomBarFraction, float taskScale,
+            float density, float spatial, float effects, MorphFrame outFrame) {
         final float startHeight = getBottomHandleHeight(endBounds.width(), density);
         final float startWidth = endBounds.width() / 2f;
         outFrame.centerX = endBounds.exactCenterX();
-        outFrame.centerY = lerp(endBounds.bottom
-                + dpToPx(density, HANDLE_AREA_HEIGHT_DP) / 2f,
+        outFrame.centerY = lerp(getBottomHandleCenterY(endBounds, bottomBarFraction, startHeight),
                 endBounds.exactCenterY(), MomentMotion.clamp(spatial));
         // The task is hidden during this color-layer morph. A restrained size overshoot
         // provides expression without non-uniformly stretching application content.

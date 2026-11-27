@@ -22,6 +22,7 @@ import static android.view.ViewTreeObserver.InternalInsetsInfo.TOUCHABLE_INSETS_
 import static android.view.WindowManager.LayoutParams.PRIVATE_FLAG_TRUSTED_OVERLAY;
 import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL;
 
+import static com.android.server.wm.MomentGeometry.CORNER_TOUCH_SIZE_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_TOP_INSET_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_WIDTH_DP;
 
@@ -50,8 +51,6 @@ import com.android.server.UiThread;
 
 final class MomentHandleWindow {
 
-    private static final int HANDLE_TOUCH_HEIGHT_DP = 32;
-    private static final int CORNER_TOUCH_SIZE_DP = 40;
     private static final long LONG_PRESS_TIMEOUT_MS = 320;
     private static final long DOUBLE_TAP_TIMEOUT_MS = ViewConfiguration.getDoubleTapTimeout();
     private static final float COMPACT_MAGNET_MAX_X_VELOCITY = 2000f;
@@ -67,6 +66,13 @@ final class MomentHandleWindow {
     private static final int RESIZE_EDGE_TOP = 1 << 1;
     private static final int RESIZE_EDGE_RIGHT = 1 << 2;
     private static final int RESIZE_EDGE_BOTTOM = 1 << 3;
+
+    private static final int MIUI_GESTURE_NONE = 0;
+    private static final int MIUI_GESTURE_TOP_CANDIDATE = 1;
+    private static final int MIUI_GESTURE_TOP_DRAG = 2;
+    private static final int MIUI_GESTURE_BOTTOM_VERTICAL = 3;
+    private static final int MIUI_SWIPE_DISTANCE_DP = 48;
+    private static final float MIUI_SWIPE_VELOCITY_DP = 1000f;
 
     private final WindowManagerService mService;
     private final Task mTask;
@@ -103,7 +109,8 @@ final class MomentHandleWindow {
         return mDisplayId == displayId;
     }
 
-    void showOrUpdate(Rect momentBounds, boolean compact, boolean interactionBlocked) {
+    void showOrUpdate(Rect momentBounds, float topBarFraction, float bottomBarFraction,
+            boolean compact, boolean interactionBlocked) {
         if (mDestroyed) {
             return;
         }
@@ -113,6 +120,7 @@ final class MomentHandleWindow {
                 return;
             }
             if (mAdded && mView != null && bounds.equals(mView.getMomentBounds())
+                    && mView.hasBarFractions(topBarFraction, bottomBarFraction)
                     && compact == mView.isCompact()
                     && interactionBlocked == mView.isInteractionBlocked()) {
                 updateSurfaceLayer();
@@ -121,6 +129,7 @@ final class MomentHandleWindow {
             if (mView == null) {
                 mView = new HandleView(mContext.createWindowContext(TYPE_NAVIGATION_BAR_PANEL, null));
             }
+            mView.setBarFractions(topBarFraction, bottomBarFraction);
             mView.setMomentBounds(bounds, compact, interactionBlocked);
             if (!mAdded) {
                 addWindow();
@@ -129,6 +138,17 @@ final class MomentHandleWindow {
                 getWindowManager().updateViewLayout(mView, mLayoutParams);
                 updateSurfaceLayer();
                 mView.invalidate();
+            }
+        });
+    }
+
+    void onGestureStyleChanged() {
+        if (mDestroyed) {
+            return;
+        }
+        mHandler.post(() -> {
+            if (!mDestroyed && mView != null) {
+                mView.onGestureStyleChanged();
             }
         });
     }
@@ -218,16 +238,19 @@ final class MomentHandleWindow {
     }
 
     private void updateWindowLayout(Rect momentBounds) {
-        final int touchHeight = dpToPx(HANDLE_TOUCH_HEIGHT_DP);
         final int cornerInset = dpToPx(CORNER_TOUCH_SIZE_DP) / 2;
         final int topInset = dpToPx(HANDLE_MENU_TOP_INSET_DP);
         final int windowWidth = Math.max(momentBounds.width() + cornerInset * 2,
                 dpToPx(HANDLE_MENU_WIDTH_DP));
+        final Rect bottomTouch = new Rect();
+        MomentGeometry.getBottomHandleTouchBounds(momentBounds,
+                mView != null ? mView.getBottomBarFraction() : 0f,
+                mContext.getResources().getDisplayMetrics().density, bottomTouch);
         mLayoutParams.x = momentBounds.centerX() - windowWidth / 2;
         mLayoutParams.y = momentBounds.top - topInset;
         mLayoutParams.width = Math.max(1, windowWidth);
-        mLayoutParams.height = Math.max(1,
-                momentBounds.height() + topInset + cornerInset + touchHeight);
+        mLayoutParams.height = Math.max(1, momentBounds.height() + topInset
+                + Math.max(cornerInset, bottomTouch.bottom - momentBounds.bottom));
         final int taskOffsetX = momentBounds.left - mLayoutParams.x;
         if (mView != null) {
             mView.setTaskOffsetX(taskOffsetX);
@@ -258,7 +281,10 @@ final class MomentHandleWindow {
         private final Rect mMomentBounds = new Rect();
         private final Rect mTmpLocalTaskBounds = new Rect();
         private final Rect mTmpTopHandleBounds = new Rect();
+        private final Rect mTmpBottomHandleBounds = new Rect();
         private final RectF mTmpHandleBounds = new RectF();
+        private float mTopBarFraction;
+        private float mBottomBarFraction;
         private final int mTouchSlop;
         private final int mDoubleTapSlopSquared;
         private final int mMaximumFlingVelocity;
@@ -286,6 +312,8 @@ final class MomentHandleWindow {
         private float mCompactVelocityY;
         private boolean mExceededTouchSlop;
         private int mResizeEdges = RESIZE_EDGE_NONE;
+        private int mMiuiGesture = MIUI_GESTURE_NONE;
+        private boolean mGestureAborted;
         private int mActivePointerId = MotionEvent.INVALID_POINTER_ID;
         private int mDownRawX;
         private int mDownRawY;
@@ -399,6 +427,19 @@ final class MomentHandleWindow {
             setMomentBounds(bounds, mCompact, mInteractionBlocked);
         }
 
+        void setBarFractions(float topBarFraction, float bottomBarFraction) {
+            mTopBarFraction = topBarFraction;
+            mBottomBarFraction = bottomBarFraction;
+        }
+
+        boolean hasBarFractions(float topBarFraction, float bottomBarFraction) {
+            return mTopBarFraction == topBarFraction && mBottomBarFraction == bottomBarFraction;
+        }
+
+        float getBottomBarFraction() {
+            return mBottomBarFraction;
+        }
+
         boolean isCompact() {
             return mCompact;
         }
@@ -409,6 +450,17 @@ final class MomentHandleWindow {
 
         Rect getMomentBounds() {
             return new Rect(mMomentBounds);
+        }
+
+        void onGestureStyleChanged() {
+            if (mCompact) {
+                return;
+            }
+            // The style is picked at ACTION_DOWN, so drop whatever is in flight and ignore the
+            // rest of that pointer stream.
+            cancelNonCompactGesture();
+            recycleCompactVelocityTracker();
+            mGestureAborted = true;
         }
 
         @Override
@@ -426,6 +478,8 @@ final class MomentHandleWindow {
                     mStartMomentBounds.set(mMomentBounds);
                     mDragMotion.begin(mMomentBounds.exactCenterX(), mMomentBounds.exactCenterY());
                     mCloseTriggered = false;
+                    mGestureAborted = false;
+                    mMiuiGesture = MIUI_GESTURE_NONE;
                     mTopHandlePressed = false;
                     mDragging = false;
                     mResizing = false;
@@ -441,10 +495,17 @@ final class MomentHandleWindow {
                         mLastTapUpTime = 0;
                         return true;
                     }
+                    final boolean miuiStyle = mService.mMomentController.isMiuiGestureStyle();
                     if (isTopHandleHit(event.getX(), event.getY())) {
-                        mTopHandlePressed = true;
                         removeCallbacks(mSingleTapRunnable);
                         mLastTapUpTime = 0;
+                        if (miuiStyle && !mHandleMenu.isExpanded()) {
+                            mMiuiGesture = MIUI_GESTURE_TOP_CANDIDATE;
+                            obtainCompactVelocityTracker();
+                            addCompactVelocityMovement(event);
+                        } else {
+                            mTopHandlePressed = true;
+                        }
                         return true;
                     }
                     if (mHandleMenu.isExpanded()) {
@@ -457,6 +518,14 @@ final class MomentHandleWindow {
                         mLastTapUpTime = 0;
                         return true;
                     }
+                    if (miuiStyle) {
+                        mMiuiGesture = MIUI_GESTURE_BOTTOM_VERTICAL;
+                        mLastTapUpTime = 0;
+                        mService.mMomentController.animateMomentHandlePress(mTask, true);
+                        obtainCompactVelocityTracker();
+                        addCompactVelocityMovement(event);
+                        return true;
+                    }
                     if (timeSinceLastTap > DOUBLE_TAP_TIMEOUT_MS) {
                         mLastTapUpTime = 0;
                     }
@@ -466,7 +535,7 @@ final class MomentHandleWindow {
                     postDelayed(mLongPressRunnable, LONG_PRESS_TIMEOUT_MS);
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (mInteractionBlocked) {
+                    if (mInteractionBlocked || mGestureAborted) {
                         return true;
                     }
                     if (mCloseTriggered) {
@@ -475,6 +544,10 @@ final class MomentHandleWindow {
                     if (mCompact) {
                         addCompactVelocityMovement(event);
                         updateCompactDrag(event);
+                        return true;
+                    }
+                    if (mMiuiGesture != MIUI_GESTURE_NONE) {
+                        updateMiuiGesture(event);
                         return true;
                     }
                     if (mTopHandlePressed) {
@@ -502,6 +575,9 @@ final class MomentHandleWindow {
                     }
                     return true;
                 case MotionEvent.ACTION_POINTER_UP:
+                    if (mGestureAborted) {
+                        return true;
+                    }
                     if (mCompact) {
                         addCompactVelocityMovement(event);
                         final int actionIndex = event.getActionIndex();
@@ -533,7 +609,7 @@ final class MomentHandleWindow {
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (mInteractionBlocked) {
+                    if (mInteractionBlocked || mGestureAborted) {
                         return true;
                     }
                     if (mCloseTriggered) {
@@ -543,6 +619,10 @@ final class MomentHandleWindow {
                     if (mCompact) {
                         addCompactVelocityMovement(event);
                         finishCompactGesture();
+                        return true;
+                    }
+                    if (mMiuiGesture != MIUI_GESTURE_NONE) {
+                        finishMiuiGesture(event);
                         return true;
                     }
                     if (mTopHandlePressed) {
@@ -582,7 +662,7 @@ final class MomentHandleWindow {
                     mExceededTouchSlop = false;
                     return true;
                 case MotionEvent.ACTION_CANCEL:
-                    if (mInteractionBlocked) {
+                    if (mInteractionBlocked || mGestureAborted) {
                         return true;
                     }
                     if (mCloseTriggered) {
@@ -592,6 +672,17 @@ final class MomentHandleWindow {
                     if (mCompact) {
                         addCompactVelocityMovement(event);
                         cancelCompactGesture();
+                        return true;
+                    }
+                    if (mMiuiGesture != MIUI_GESTURE_NONE) {
+                        if (mMiuiGesture == MIUI_GESTURE_BOTTOM_VERTICAL) {
+                            mService.mMomentController.animateMomentHandlePress(mTask, false);
+                        }
+                        mMiuiGesture = MIUI_GESTURE_NONE;
+                        mDragMotion.cancel();
+                        recycleCompactVelocityTracker();
+                        mDragging = false;
+                        mExceededTouchSlop = false;
                         return true;
                     }
                     if (mTopHandlePressed) {
@@ -621,6 +712,62 @@ final class MomentHandleWindow {
             }
         }
 
+        /** Top bar drags the window once past the slop; bottom bar only tracks the swipe. */
+        private void updateMiuiGesture(MotionEvent event) {
+            addCompactVelocityMovement(event);
+            if (mMiuiGesture == MIUI_GESTURE_BOTTOM_VERTICAL) {
+                return;
+            }
+            final int pointerIndex = getActivePointerIndex(event);
+            final int dx = (int) event.getRawX(pointerIndex) - mDownRawX;
+            final int dy = (int) event.getRawY(pointerIndex) - mDownRawY;
+            if (mMiuiGesture == MIUI_GESTURE_TOP_CANDIDATE && Math.hypot(dx, dy) > mTouchSlop) {
+                mMiuiGesture = MIUI_GESTURE_TOP_DRAG;
+                mDragging = true;
+                mExceededTouchSlop = true;
+            }
+            if (mMiuiGesture == MIUI_GESTURE_TOP_DRAG) {
+                mDragMotion.track(mStartCenterX + dx, mStartCenterY + dy);
+            }
+        }
+
+        private void finishMiuiGesture(MotionEvent event) {
+            addCompactVelocityMovement(event);
+            computeCompactVelocity();
+            recycleCompactVelocityTracker();
+            final int gesture = mMiuiGesture;
+            mMiuiGesture = MIUI_GESTURE_NONE;
+            mDragging = false;
+            mExceededTouchSlop = false;
+            mLastTapUpTime = 0;
+            if (gesture == MIUI_GESTURE_TOP_CANDIDATE) {
+                if (isTopHandleHit(event.getX(), event.getY())) {
+                    mHandleMenu.toggle();
+                }
+                return;
+            }
+            if (gesture == MIUI_GESTURE_TOP_DRAG) {
+                mDragMotion.release(mCompactVelocityX, mCompactVelocityY);
+                return;
+            }
+            final int dx = (int) event.getRawX() - mDownRawX;
+            final int dy = (int) event.getRawY() - mDownRawY;
+            final float density = getResources().getDisplayMetrics().density;
+            final float distance = MIUI_SWIPE_DISTANCE_DP * density;
+            final float velocity = MIUI_SWIPE_VELOCITY_DP * density;
+            if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > mTouchSlop) {
+                if (dy > 0 && (dy >= distance || mCompactVelocityY >= velocity)) {
+                    mService.mMomentController.expandMomentTaskAnimated(mTask.mTaskId);
+                    return;
+                }
+                if (dy < 0 && (-dy >= distance || -mCompactVelocityY >= velocity)) {
+                    mService.mMomentController.closeMomentTask(mTask.mTaskId);
+                    return;
+                }
+            }
+            mService.mMomentController.animateMomentHandlePress(mTask, false);
+        }
+
         @Override
         public void onComputeInternalInsets(ViewTreeObserver.InternalInsetsInfo info) {
             updateTouchableRegion(info.touchableRegion);
@@ -632,7 +779,6 @@ final class MomentHandleWindow {
                 region.setEmpty();
                 return;
             }
-            final int touchHeight = dpToPx(HANDLE_TOUCH_HEIGHT_DP);
             final int cornerSize = dpToPx(CORNER_TOUCH_SIZE_DP);
             final int cornerInset = cornerSize / 2;
             final int taskLeft = getTaskLeft();
@@ -643,7 +789,8 @@ final class MomentHandleWindow {
                 region.set(taskLeft, taskTop, taskRight, taskBottom);
                 return;
             }
-            region.set(taskLeft, taskBottom, taskRight, taskBottom + touchHeight);
+            getBottomHandleTouchBounds(mTmpBottomHandleBounds);
+            region.set(mTmpBottomHandleBounds);
             getCurrentTopHandleBounds(mTmpTopHandleBounds,
                     true /* includeCollapsedTouchTarget */);
             region.op(mTmpTopHandleBounds, Region.Op.UNION);
@@ -665,6 +812,12 @@ final class MomentHandleWindow {
             getCurrentTopHandleBounds(mTmpTopHandleBounds,
                     true /* includeCollapsedTouchTarget */);
             return mTmpTopHandleBounds.contains(Math.round(x), Math.round(y));
+        }
+
+        private void getBottomHandleTouchBounds(Rect outBounds) {
+            getLocalTaskBounds(mTmpLocalTaskBounds);
+            MomentGeometry.getBottomHandleTouchBounds(mTmpLocalTaskBounds, mBottomBarFraction,
+                    getResources().getDisplayMetrics().density, outBounds);
         }
 
         private int getTaskTop() {
@@ -706,8 +859,7 @@ final class MomentHandleWindow {
                 boolean includeCollapsedTouchTarget) {
             getLocalTaskBounds(mTmpLocalTaskBounds);
             final float density = getResources().getDisplayMetrics().density;
-            MomentGeometry.getTopHandleBounds(mTmpLocalTaskBounds, density,
-                    MomentGeometry.getDisplayedCornerRadius(mTask, mMomentBounds, density),
+            MomentGeometry.getTopHandleBounds(mTmpLocalTaskBounds, mTopBarFraction, density,
                     mHandleMenu.getShapeProgress(), includeCollapsedTouchTarget,
                     mTmpHandleBounds);
             mTmpHandleBounds.round(outBounds);
@@ -718,7 +870,8 @@ final class MomentHandleWindow {
                 mHandleSurfaces.hideTop();
                 return;
             }
-            mHandleSurfaces.showOrUpdateTop(mMomentBounds, mHandleMenu.getShapeProgress());
+            mHandleSurfaces.showOrUpdateTop(mMomentBounds, mTopBarFraction,
+                    mHandleMenu.getShapeProgress());
         }
 
         private int getResizeEdges(float x, float y) {
@@ -810,6 +963,7 @@ final class MomentHandleWindow {
             mTopHandlePressed = false;
             mDragging = false;
             mExceededTouchSlop = false;
+            mMiuiGesture = MIUI_GESTURE_NONE;
             mActivePointerId = MotionEvent.INVALID_POINTER_ID;
             resetResizeGesture();
         }

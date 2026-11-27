@@ -21,7 +21,6 @@ import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 import static android.app.WindowConfiguration.WINDOWING_MODE_MOMENT;
 
 import static com.android.server.wm.MomentGeometry.COMPACT_DISMISS_TARGET_SIZE_DP;
-import static com.android.server.wm.MomentGeometry.HANDLE_AREA_HEIGHT_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_TOP_INSET_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_WIDTH_DP;
 
@@ -75,6 +74,7 @@ final class MomentController {
 
     private boolean mEnabled;
     private boolean mFixedAspectRatio;
+    private volatile boolean mMiuiGestureStyle;
     private float mDefaultScale = DEFAULT_SCALE;
 
     MomentController(WindowManagerService service) {
@@ -115,6 +115,23 @@ final class MomentController {
                 scheduleMomentSurfaceUpdateLocked(task);
             });
         }
+    }
+
+    void setGestureStyleFromSettings(int style) {
+        final boolean miui = style == 1;
+        synchronized (mService.mGlobalLock) {
+            if (mMiuiGestureStyle == miui) {
+                return;
+            }
+            mMiuiGestureStyle = miui;
+            for (int i = mHandleWindows.size() - 1; i >= 0; i--) {
+                mHandleWindows.valueAt(i).onGestureStyleChanged();
+            }
+        }
+    }
+
+    boolean isMiuiGestureStyle() {
+        return mMiuiGestureStyle;
     }
 
     private void updateAspectRatioLocked(Task task, MomentTaskSurfaceState state) {
@@ -768,13 +785,12 @@ final class MomentController {
                 safeBounds.bottom = Math.max(safeBounds.top + 1,
                         Math.min(safeBounds.bottom, display.getBounds().bottom - imeInsets.bottom));
             }
+            // The bar bands and both handles are inside the window, so it only has to fit.
             final Rect crop = state.getContentCrop();
-            final float availableHeight = Math.max(1f, safeBounds.height()
-                    - HANDLE_AREA_HEIGHT_DP * getDensityLocked(task));
             final float endScale = Math.max(MIN_SCALE, Math.min(
                     clampScaleLocked(task, state, state.getCompactRestoreScale()),
                     Math.min((float) safeBounds.width() / Math.max(1, crop.width()),
-                            availableHeight / Math.max(1, crop.height()))));
+                            (float) safeBounds.height() / Math.max(1, crop.height()))));
             startTaskTransformAnimationLocked(task, state, endScale,
                     safeBounds.exactCenterX(), safeBounds.exactCenterY(), 1f,
                     MomentGeometry.getCornerRadius(getDensityLocked(task)) * endScale,
@@ -928,10 +944,11 @@ final class MomentController {
             return Math.max(MIN_SCALE,
                     Math.min(MAX_SCALE, (float) safeBounds.width() / taskWidth));
         }
+        // The visible window is the whole task height (bars included) plus the handle menu
+        // that expands above it.
         final int taskHeight = Math.max(1, taskBounds.height());
-        final float density = getDensityLocked(task);
         final float availableHeight = safeBounds.height()
-                - (HANDLE_MENU_TOP_INSET_DP + HANDLE_AREA_HEIGHT_DP) * density;
+                - HANDLE_MENU_TOP_INSET_DP * getDensityLocked(task);
         return Math.max(MIN_SCALE, Math.min(MAX_SCALE, availableHeight / taskHeight));
     }
 
@@ -956,28 +973,27 @@ final class MomentController {
         final float density = getDensityLocked(task);
         final float handleHeight = MomentGeometry.getBottomHandleHeight(
                 surfaceBounds.width(), density);
-        final float handleCenterOffset = HANDLE_AREA_HEIGHT_DP * density / 2f;
-        final float minCenterY = safeBounds.top - handleCenterOffset
-                + handleHeight / 2f - halfHeight;
+        // The window may leave the top of the screen as long as its bottom bar, which holds the
+        // drag handle, stays reachable; it never hides below the stable area.
+        final float bottomBarHeight = Math.max(handleHeight, MomentGeometry.getBarHeight(
+                surfaceBounds, state.getBottomBarFraction()));
+        final float minCenterY = safeBounds.top + bottomBarHeight - halfHeight;
+        final float maxCenterY = safeBounds.bottom - halfHeight;
         final boolean landscape = displayContent.getBounds().width()
                 > displayContent.getBounds().height();
 
         final float minCenterX;
         final float maxCenterX;
-        final float maxCenterY;
         if (landscape) {
             final float requiredHalfWidth = Math.max(halfWidth,
                     HANDLE_MENU_WIDTH_DP * density / 2f);
             minCenterX = safeBounds.left + requiredHalfWidth;
             maxCenterX = safeBounds.right - requiredHalfWidth;
-            maxCenterY = safeBounds.bottom - handleCenterOffset - handleHeight / 2f - halfHeight;
         } else {
             final float topHandleHalfWidth = Math.max(HANDLE_MENU_WIDTH_DP * density / 2f,
                     surfaceBounds.width() / 4f);
             minCenterX = safeBounds.left + topHandleHalfWidth;
             maxCenterX = safeBounds.right - topHandleHalfWidth;
-            final float maxTaskBottom = safeBounds.bottom - handleCenterOffset - handleHeight / 2f;
-            maxCenterY = maxTaskBottom - halfHeight;
         }
         final int currentCenterX = state.getCenterX();
         final int currentCenterY = state.getCenterY();
@@ -1054,6 +1070,7 @@ final class MomentController {
         cancelTaskAnimationLocked(task, state);
         final Rect startBounds = state.getSurfaceBounds();
         final float taskScale = state.getScale();
+        final float bottomBarFraction = state.getBottomBarFraction();
         final float density = getDensityLocked(task);
         final int color = mService.mContext.getColor(android.R.color.system_accent1_100);
         final int generation;
@@ -1080,8 +1097,8 @@ final class MomentController {
         final MomentGeometry.MorphFrame frame = new MomentGeometry.MorphFrame();
         mAnimationRunner.start(state, MomentMotion.EXIT_SPATIAL,
                 () -> state.isCloseAnimation(generation), (spatial, effects) -> {
-                MomentGeometry.evaluateCloseMorph(startBounds, taskScale, density,
-                        MomentMotion.clamp(spatial), effects, frame);
+                MomentGeometry.evaluateCloseMorph(startBounds, bottomBarFraction, taskScale,
+                        density, MomentMotion.clamp(spatial), effects, frame);
                 try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                     if (state.applyCloseAnimationFrame(t, generation, frame.centerX, frame.centerY,
                             frame.width, frame.height, frame.cornerRadius, frame.alpha)) {
@@ -1099,9 +1116,11 @@ final class MomentController {
         }
         final Rect endBounds = state.getSurfaceBounds();
         final float taskScale = state.getScale();
+        final float bottomBarFraction = state.getBottomBarFraction();
         final float density = getDensityLocked(task);
         final MomentGeometry.MorphFrame initialFrame = new MomentGeometry.MorphFrame();
-        MomentGeometry.evaluateOpenMorph(endBounds, taskScale, density, 0f, 0f, initialFrame);
+        MomentGeometry.evaluateOpenMorph(endBounds, bottomBarFraction, taskScale, density, 0f, 0f,
+                initialFrame);
         final int color = mService.mContext.getColor(android.R.color.system_accent1_100);
         final int generation = state.beginOpenAnimation(startTransaction, color,
                 initialFrame.centerX, initialFrame.centerY, initialFrame.width,
@@ -1112,18 +1131,18 @@ final class MomentController {
         }
         final int taskId = task.mTaskId;
         startTransaction.addTransactionCommittedListener(Runnable::run,
-                () -> startMomentOpenAnimator(taskId, state, generation, endBounds, taskScale,
-                        density));
+                () -> startMomentOpenAnimator(taskId, state, generation, endBounds,
+                        bottomBarFraction, taskScale, density));
         removeHandleWindowLocked(task);
         Slog.i(TAG, "Prepared open animation for task " + taskId + " bounds=" + endBounds);
     }
 
     private void startMomentOpenAnimator(int taskId, MomentTaskSurfaceState state, int generation,
-            Rect endBounds, float taskScale, float density) {
+            Rect endBounds, float bottomBarFraction, float taskScale, float density) {
         final MomentGeometry.MorphFrame frame = new MomentGeometry.MorphFrame();
         mAnimationRunner.start(state, MomentMotion.DEFAULT_SPATIAL,
                 () -> state.isOpenAnimation(generation), (spatial, effects) -> {
-            MomentGeometry.evaluateOpenMorph(endBounds, taskScale, density,
+            MomentGeometry.evaluateOpenMorph(endBounds, bottomBarFraction, taskScale, density,
                     spatial, effects, frame);
             try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                 if (state.applyOpenAnimationFrame(t, generation, frame.centerX, frame.centerY,
@@ -1550,7 +1569,8 @@ final class MomentController {
             handleWindow = new MomentHandleWindow(mService, task, state.getHandleSurfaces());
             mHandleWindows.put(task.mTaskId, handleWindow);
         }
-        handleWindow.showOrUpdate(handleBounds, state.isMomentCompact(),
+        handleWindow.showOrUpdate(handleBounds, state.getTopBarFraction(),
+                state.getBottomBarFraction(), state.isMomentCompact(),
                 state.isTransformAnimating() || mLayoutSnapshots.containsKey(task.mTaskId));
     }
 
