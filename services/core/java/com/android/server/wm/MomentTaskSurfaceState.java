@@ -75,6 +75,10 @@ final class MomentTaskSurfaceState {
     private final Rect mFixedLayoutBounds = new Rect();
     private final InsetsState mFixedLayoutInsets = new InsetsState();
     private int mFixedLayoutRotation = -1;
+    // Transient pose of an uncommitted bottom-bar swipe, applied on top of the resting pose.
+    private float mPreviewScale = 1f;
+    private float mPreviewOffsetY;
+    private float mPreviewAlpha = 1f;
 
     MomentTaskSurfaceState(Task task, float scale) {
         mTask = task;
@@ -415,7 +419,8 @@ final class MomentTaskSurfaceState {
         updateBounds();
         mCornerRadius = MomentGeometry.getCornerRadius(getDensity());
         applyTaskTransform(t);
-        if (showHandle && !mMomentCompact && !mTransformAnimating && !mResizing) {
+        if (showHandle && !mMomentCompact && !mTransformAnimating && !mResizing
+                && !hasGesturePreview()) {
             mHandleSurfaces.showOrUpdateBottom(t, getHandleBounds(), mBottomBarFraction);
         } else {
             mHandleSurfaces.hideBottom(t);
@@ -482,7 +487,8 @@ final class MomentTaskSurfaceState {
     }
 
     synchronized int beginCloseAnimation(SurfaceControl.Transaction t, int color,
-            float cornerRadius) throws Surface.OutOfResourcesException {
+            float cornerRadius, Rect startBounds, float startAlpha)
+            throws Surface.OutOfResourcesException {
         if (mClosing || mTask.mSurfaceControl == null) {
             return -1;
         }
@@ -494,8 +500,8 @@ final class MomentTaskSurfaceState {
         mMorphLayer.create(parent, "MomentCloseLayer#" + mTask.mTaskId);
         mClosing = true;
         final int generation = ++mAnimationGeneration;
-        mMorphLayer.show(t, color, mSurfaceBounds.exactCenterX(), mSurfaceBounds.exactCenterY(),
-                mSurfaceBounds.width(), mSurfaceBounds.height(), cornerRadius, 1f);
+        mMorphLayer.show(t, color, startBounds.exactCenterX(), startBounds.exactCenterY(),
+                startBounds.width(), startBounds.height(), cornerRadius, startAlpha);
         t.hide(mTask.mSurfaceControl);
         mHandleSurfaces.hideBottom(t);
         return generation;
@@ -595,12 +601,57 @@ final class MomentTaskSurfaceState {
         }
     }
 
+    /**
+     * Sets the uncommitted swipe pose. Returns false when nothing changed. The identity pose
+     * ({@code 1, 0, 1}) clears it.
+     */
+    synchronized boolean setGesturePreview(float scale, float offsetY, float alpha) {
+        if (mPreviewScale == scale && mPreviewOffsetY == offsetY && mPreviewAlpha == alpha) {
+            return false;
+        }
+        mPreviewScale = scale;
+        mPreviewOffsetY = offsetY;
+        mPreviewAlpha = alpha;
+        return true;
+    }
+
+    synchronized void clearGesturePreview() {
+        mPreviewScale = 1f;
+        mPreviewOffsetY = 0f;
+        mPreviewAlpha = 1f;
+    }
+
+    synchronized boolean hasGesturePreview() {
+        return mPreviewScale != 1f || mPreviewOffsetY != 0f || mPreviewAlpha != 1f;
+    }
+
+    synchronized float getGesturePreviewScale() {
+        return mPreviewScale;
+    }
+
+    synchronized float getGesturePreviewAlpha() {
+        return mPreviewAlpha;
+    }
+
+    /** Where the window is drawn with the swipe preview applied, in display pixels. */
+    synchronized Rect getGesturePreviewBounds() {
+        updateBounds();
+        final float width = mSurfaceBounds.width() * mPreviewScale;
+        final float height = mSurfaceBounds.height() * mPreviewScale;
+        final float centerX = mSurfaceBounds.exactCenterX();
+        final float centerY = mSurfaceBounds.exactCenterY() + mPreviewOffsetY;
+        return new Rect(Math.round(centerX - width / 2f), Math.round(centerY - height / 2f),
+                Math.round(centerX + width / 2f), Math.round(centerY + height / 2f));
+    }
+
     private void applyTaskTransform(SurfaceControl.Transaction t) {
-        final float scaleX = mTransformAnimating ? mAnimatedScaleX : mScale;
-        final float scaleY = mTransformAnimating ? mAnimatedScaleY : mScale;
+        final float scaleX = mTransformAnimating ? mAnimatedScaleX : mScale * mPreviewScale;
+        final float scaleY = mTransformAnimating ? mAnimatedScaleY : mScale * mPreviewScale;
         final float centerX = mTransformAnimating ? mAnimatedCenterX : mSurfaceBounds.exactCenterX();
-        final float centerY = mTransformAnimating ? mAnimatedCenterY : mSurfaceBounds.exactCenterY();
+        final float centerY = mTransformAnimating ? mAnimatedCenterY
+                : mSurfaceBounds.exactCenterY() + mPreviewOffsetY;
         final float cropProgress = mTransformAnimating ? mAnimatedCropProgress : 1f;
+        final float alpha = mTransformAnimating ? mAnimatedAlpha : mPreviewAlpha;
         mAnimatedCrop.set(
                 Math.round(mContentCrop.left * cropProgress),
                 Math.round(mContentCrop.top * cropProgress),
@@ -614,6 +665,8 @@ final class MomentTaskSurfaceState {
         final float cornerRadius = mTransformAnimating
                 ? mAnimatedDisplayedCornerRadius / Math.max(0.001f, scale)
                 : mCornerRadius;
+        final float displayedCornerRadius = mTransformAnimating
+                ? mAnimatedDisplayedCornerRadius : mCornerRadius * scale;
         t.setPosition(mTask.mSurfaceControl,
                 centerX - width / 2f - mAnimatedCrop.left * scaleX,
                 centerY - height / 2f - mAnimatedCrop.top * scaleY)
@@ -621,15 +674,12 @@ final class MomentTaskSurfaceState {
                 .setCornerRadius(mTask.mSurfaceControl,
                         cornerRadius)
                 .setScale(mTask.mSurfaceControl, scaleX, scaleY)
-                .setAlpha(mTask.mSurfaceControl, mTransformAnimating ? mAnimatedAlpha : 1f)
+                .setAlpha(mTask.mSurfaceControl, alpha)
                 .show(mTask.mSurfaceControl);
         mWindowEffects.apply(t, centerX - width / 2f, centerY - height / 2f,
-                width, height, mTransformAnimating ? mAnimatedDisplayedCornerRadius
-                        : mCornerRadius * scale,
-                mTransformAnimating ? mAnimatedAlpha : 1f, getDensity());
+                width, height, displayedCornerRadius, alpha, getDensity());
         mResizeEffects.apply(t, mAnimatedCrop, centerX - width / 2f, centerY - height / 2f,
-                width, height, mTransformAnimating ? mAnimatedDisplayedCornerRadius
-                        : mCornerRadius * scale, getDensity());
+                width, height, displayedCornerRadius, getDensity());
         final MomentLayoutSnapshot snapshot = mLayoutSnapshot;
         if (snapshot != null) {
             snapshot.applyBounds(t, mAnimatedCrop, scaleX, scaleY);
@@ -645,6 +695,7 @@ final class MomentTaskSurfaceState {
     }
 
     void reset(SurfaceControl.Transaction t) {
+        clearGesturePreview();
         setResizing(false);
         mResizeEffects.clear(t);
         mWindowEffects.hide(t);

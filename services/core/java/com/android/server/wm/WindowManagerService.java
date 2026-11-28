@@ -7232,7 +7232,7 @@ public class WindowManagerService extends IWindowManager.Stub
 
     @Override
     @EnforcePermission(android.Manifest.permission.STATUS_BAR)
-    public boolean convertTaskToMomentFromGesture(int taskId) {
+    public boolean convertTaskToMomentFromGesture(int taskId, @Nullable Rect startBounds) {
         convertTaskToMomentFromGesture_enforcePermission();
         final int userId = mCurrentUserId;
         if (!mMomentController.isEnabledForUser(userId)
@@ -7249,7 +7249,7 @@ public class WindowManagerService extends IWindowManager.Stub
                     return false;
                 }
             }
-            mMomentController.convertTaskToMoment(taskId);
+            mMomentController.convertTaskToMoment(taskId, startBounds, true /* compact */);
             return true;
         } catch (IllegalStateException e) {
             Slog.d("MomentGesture", "Unable to convert task " + taskId + ": " + e.getMessage());

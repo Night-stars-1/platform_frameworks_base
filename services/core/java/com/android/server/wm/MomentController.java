@@ -24,6 +24,7 @@ import static com.android.server.wm.MomentGeometry.COMPACT_DISMISS_TARGET_SIZE_D
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_TOP_INSET_DP;
 import static com.android.server.wm.MomentGeometry.HANDLE_MENU_WIDTH_DP;
 
+import android.annotation.Nullable;
 import android.app.ActivityOptions;
 import android.app.ActivityThread;
 import android.content.Intent;
@@ -65,6 +66,7 @@ final class MomentController {
     private static final int ANIMATION_RESTORE_COMPACT = 2;
     private static final int ANIMATION_ENTER_COMPACT = 3;
     private static final int ANIMATION_CONVERT_FULLSCREEN = 4;
+    private static final int ANIMATION_CONVERT_COMPACT = 5;
 
     private final WindowManagerService mService;
     private final ArrayMap<Integer, MomentTaskSurfaceState> mStates = new ArrayMap<>();
@@ -315,6 +317,16 @@ final class MomentController {
     }
 
     int convertTaskToMoment(int taskId) {
+        return convertTaskToMoment(taskId, null /* startBounds */, false /* compact */);
+    }
+
+    /**
+     * Converts a fullscreen task to a Moment window. When {@code startBounds} is given (the
+     * launcher's task card on screen, in display pixels) the window flies from that card;
+     * otherwise it shrinks from fullscreen. With {@code compact} it lands minimized in the
+     * top-right corner instead of at its default size in the middle of the screen.
+     */
+    int convertTaskToMoment(int taskId, @Nullable Rect startBounds, boolean compact) {
         if (!isEnabled()) {
             throw new IllegalStateException("Moment is disabled");
         }
@@ -362,11 +374,39 @@ final class MomentController {
             ensureMomentTaskLayoutLocked(rootTask, state);
             constrainMomentPositionLocked(rootTask, state);
             final Rect targetBounds = state.getSurfaceBounds();
+            // Minimized: the smallest scale, against the right edge just below the status bar.
+            // The default scale stays the size it restores to.
+            final float endScale = compact ? clampScaleLocked(rootTask, state, MIN_SCALE)
+                    : state.getScale();
+            final float endCenterX;
+            final float endCenterY;
+            if (compact) {
+                final Rect safeBounds = new Rect();
+                getMomentSafeBoundsLocked(rootTask, safeBounds);
+                final Rect crop = state.getContentCrop();
+                endCenterX = safeBounds.right - crop.width() * endScale / 2f;
+                endCenterY = safeBounds.top + crop.height() * endScale / 2f;
+            } else {
+                endCenterX = targetBounds.exactCenterX();
+                endCenterY = targetBounds.exactCenterY();
+            }
             final Rect fullscreenBounds = state.getFullscreenBounds();
+            final boolean fromCard = startBounds != null && !startBounds.isEmpty()
+                    && !fullscreenBounds.isEmpty();
+            // The card is the fullscreen task scaled uniformly, so it keeps the fullscreen
+            // pose's per-axis ratio and only shrinks it by the card's size.
+            final float cardScaleX = fromCard
+                    ? (float) startBounds.width() / fullscreenBounds.width() : 1f;
+            final float cardScaleY = fromCard
+                    ? (float) startBounds.height() / fullscreenBounds.height() : 1f;
             final float startScaleX = (float) fullscreenBounds.width()
-                    / rootTask.getBounds().width();
+                    / rootTask.getBounds().width() * cardScaleX;
             final float startScaleY = (float) fullscreenBounds.height()
-                    / rootTask.getBounds().height();
+                    / rootTask.getBounds().height() * cardScaleY;
+            final float startCenterX = fromCard
+                    ? startBounds.exactCenterX() : fullscreenBounds.exactCenterX();
+            final float startCenterY = fromCard
+                    ? startBounds.exactCenterY() : fullscreenBounds.exactCenterY();
 
             markNoAnimationLocked(rootTask);
             rootTask.setWindowingMode(WINDOWING_MODE_MOMENT);
@@ -382,13 +422,13 @@ final class MomentController {
             });
             waitForLayoutLocked(rootTask, false /* animationFinished */);
             startTaskTransformAnimationFromLocked(rootTask, state, startScaleX, startScaleY,
-                    fullscreenBounds.exactCenterX(), fullscreenBounds.exactCenterY(), 1f,
-                    getDisplayCornerRadiusLocked(rootTask),
-                    state.getScale(), state.getScale(), targetBounds.exactCenterX(),
-                    targetBounds.exactCenterY(), 1f,
-                    MomentGeometry.getCornerRadius(getDensityLocked(rootTask)) * state.getScale(),
+                    startCenterX, startCenterY, 1f,
+                    getDisplayCornerRadiusLocked(rootTask) * Math.min(cardScaleX, cardScaleY),
+                    endScale, endScale, endCenterX, endCenterY, 1f,
+                    MomentGeometry.getCornerRadius(getDensityLocked(rootTask)) * endScale,
                     1f,
-                    MomentMotion.SLOW_SPATIAL, ANIMATION_CONVERT_FULLSCREEN);
+                    fromCard ? MomentMotion.DEFAULT_SPATIAL : MomentMotion.SLOW_SPATIAL,
+                    compact ? ANIMATION_CONVERT_COMPACT : ANIMATION_CONVERT_FULLSCREEN);
             return rootTask.mTaskId;
         }
     }
@@ -581,6 +621,28 @@ final class MomentController {
                 return;
             }
             getOrCreateStateLocked(task).animateHandlePress(isTouchDown);
+        }
+    }
+
+    /**
+     * Applies the transient pose a bottom-bar swipe previews before it commits: the window
+     * follows the finger by {@code offsetY}, scaled by {@code scale} around its center and faded
+     * to {@code alpha}. The identity pose clears it. Ignored while another animation owns the
+     * window.
+     */
+    void setMomentGesturePreview(Task task, float scale, float offsetY, float alpha) {
+        synchronized (mService.mGlobalLock) {
+            if (task == null || task.getWindowingMode() != WINDOWING_MODE_MOMENT) {
+                return;
+            }
+            final MomentTaskSurfaceState state = getOrCreateStateLocked(task);
+            if (state.isMomentCompact() || state.isOpening() || state.isClosing()
+                    || state.isTransformAnimating()
+                    || !state.setGesturePreview(scale, offsetY, alpha)) {
+                return;
+            }
+            state.apply(task.getSyncTransaction(), shouldShowHandleLocked(task, state));
+            scheduleMomentSurfaceUpdateLocked(task);
         }
     }
 
@@ -1068,15 +1130,18 @@ final class MomentController {
             return;
         }
         cancelTaskAnimationLocked(task, state);
-        final Rect startBounds = state.getSurfaceBounds();
-        final float taskScale = state.getScale();
+        // A bottom-bar swipe may have shrunk and faded the window already; close from there.
+        final Rect startBounds = state.getGesturePreviewBounds();
+        final float taskScale = state.getScale() * state.getGesturePreviewScale();
+        final float startAlpha = state.getGesturePreviewAlpha();
+        state.clearGesturePreview();
         final float bottomBarFraction = state.getBottomBarFraction();
         final float density = getDensityLocked(task);
         final int color = mService.mContext.getColor(android.R.color.system_accent1_100);
         final int generation;
         try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
             generation = state.beginCloseAnimation(t, color,
-                    MomentGeometry.getCornerRadius(density) * taskScale);
+                    MomentGeometry.getCornerRadius(density) * taskScale, startBounds, startAlpha);
             if (generation < 0) {
                 Slog.w(TAG, "Close animation unavailable for task " + task.mTaskId
                         + ", closing immediately");
@@ -1101,7 +1166,8 @@ final class MomentController {
                         density, MomentMotion.clamp(spatial), effects, frame);
                 try (SurfaceControl.Transaction t = mService.mTransactionFactory.get()) {
                     if (state.applyCloseAnimationFrame(t, generation, frame.centerX, frame.centerY,
-                            frame.width, frame.height, frame.cornerRadius, frame.alpha)) {
+                            frame.width, frame.height, frame.cornerRadius,
+                            frame.alpha * startAlpha)) {
                         t.apply();
                     }
                 }
@@ -1222,11 +1288,16 @@ final class MomentController {
             float endScaleX, float endScaleY, float endCenterX, float endCenterY, float endAlpha,
             float endDisplayedCornerRadius, float endCropProgress, MomentMotion.Spec spatialSpec,
             int endAction) {
-        final Rect startBounds = state.getSurfaceBounds();
-        final float startScale = state.getScale();
+        // Start from the swipe preview pose, if any, so committing the gesture never jumps.
+        final Rect startBounds = state.getGesturePreviewBounds();
+        final float previewScale = state.getGesturePreviewScale();
+        final float startScale = state.getScale() * previewScale;
+        final float startAlpha = state.getGesturePreviewAlpha();
+        final float startCornerRadius = state.getDisplayedCornerRadius() * previewScale;
+        state.clearGesturePreview();
         startTaskTransformAnimationFromLocked(task, state, startScale, startScale,
-                startBounds.exactCenterX(), startBounds.exactCenterY(), 1f,
-                state.getDisplayedCornerRadius(), endScaleX, endScaleY, endCenterX, endCenterY,
+                startBounds.exactCenterX(), startBounds.exactCenterY(), startAlpha,
+                startCornerRadius, endScaleX, endScaleY, endCenterX, endCenterY,
                 endAlpha, endDisplayedCornerRadius, endCropProgress,
                 spatialSpec, endAction);
     }
@@ -1236,7 +1307,9 @@ final class MomentController {
             float startAlpha, float startDisplayedCornerRadius, float endScaleX, float endScaleY,
             float endCenterX, float endCenterY, float endAlpha, float endDisplayedCornerRadius,
             float endCropProgress, MomentMotion.Spec spatialSpec, int endAction) {
-        final float startCropProgress = endAction == ANIMATION_CONVERT_FULLSCREEN ? 0f : 1f;
+        final boolean converting = endAction == ANIMATION_CONVERT_FULLSCREEN
+                || endAction == ANIMATION_CONVERT_COMPACT;
+        final float startCropProgress = converting ? 0f : 1f;
         final int generation = state.beginTransformAnimation(startScaleX, startScaleY,
                 startCenterX, startCenterY, startAlpha, startDisplayedCornerRadius,
                 startCropProgress);
@@ -1291,7 +1364,7 @@ final class MomentController {
                         t.apply();
                     }
                 }
-                if (endAction == ANIMATION_CONVERT_FULLSCREEN && progress >= 0.95f
+                if (converting && progress >= 0.95f
                         && !settlingPosted[0]) {
                     settlingPosted[0] = true;
                     mService.mH.post(() -> {
@@ -1352,6 +1425,16 @@ final class MomentController {
                     state.setScale(endScale);
                     constrainMomentPositionLocked(task, state);
                     applyMomentStateLocked(task, state, true /* allowSurfaceHandle */);
+                    finishLayoutSnapshotAnimationLocked(task);
+                    break;
+                case ANIMATION_CONVERT_COMPACT:
+                    // Restores to the default size, the one an ordinary conversion lands on.
+                    state.finishFullscreenConversion();
+                    state.setCenter(Math.round(endCenterX), Math.round(endCenterY));
+                    state.setScale(endScale);
+                    state.enterCompact(clampScaleLocked(task, state, mDefaultScale));
+                    constrainMomentCompactPositionLocked(task, state);
+                    applyMomentStateLocked(task, state, false /* allowSurfaceHandle */);
                     finishLayoutSnapshotAnimationLocked(task);
                     break;
                 default:

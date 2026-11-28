@@ -486,9 +486,14 @@ interface IWindowManager
     @EnforcePermission("STATUS_BAR")
     boolean handleMomentNavHandleDoubleTap(int taskId);
 
-    /** Converts a task to a Moment window from the launcher's MIUI-style corner gesture. */
+    /**
+     * Converts a task to a minimized Moment window from the launcher's MIUI-style corner
+     * gesture. {@code startBounds} is the launcher's task card on screen when the gesture is
+     * released, in display pixels; the window flies from there into the top-right corner. When
+     * it is null the window shrinks from fullscreen.
+     */
     @EnforcePermission("STATUS_BAR")
-    boolean convertTaskToMomentFromGesture(int taskId);
+    boolean convertTaskToMomentFromGesture(int taskId, in Rect startBounds);
 
     /**
     * Called by System UI to indicate the maximum bounds of the system Privacy Indicator, for the

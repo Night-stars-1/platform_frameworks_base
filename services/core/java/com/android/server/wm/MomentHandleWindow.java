@@ -28,6 +28,9 @@ import static com.android.server.wm.MomentGeometry.HANDLE_MENU_WIDTH_DP;
 
 import android.app.ActivityThread;
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Region;
@@ -35,6 +38,7 @@ import android.os.Handler;
 import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.SurfaceControl;
@@ -45,6 +49,7 @@ import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 import android.widget.FrameLayout;
 
+import com.android.internal.dynamicanimation.animation.SpringAnimation;
 import com.android.internal.dynamicanimation.animation.SpringForce;
 
 import com.android.server.UiThread;
@@ -71,8 +76,20 @@ final class MomentHandleWindow {
     private static final int MIUI_GESTURE_TOP_CANDIDATE = 1;
     private static final int MIUI_GESTURE_TOP_DRAG = 2;
     private static final int MIUI_GESTURE_BOTTOM_VERTICAL = 3;
-    private static final int MIUI_SWIPE_DISTANCE_DP = 48;
+    // Bottom-bar swipe: releasing past this distance (or flinging) expands or closes the window.
+    private static final int MIUI_SWIPE_DISTANCE_DP = 80;
     private static final float MIUI_SWIPE_VELOCITY_DP = 1000f;
+    // Swipe-down preview: the window follows the finger at this ratio, capped so the overlay
+    // stays inside the handle window.
+    private static final float MIUI_EXPAND_FOLLOW = 0.25f;
+    // Swipe-up preview: the window follows at this ratio and, at the commit distance, is
+    // shrunk and faded to these values.
+    private static final float MIUI_CLOSE_FOLLOW = 0.35f;
+    private static final float MIUI_CLOSE_PREVIEW_SCALE = 0.85f;
+    private static final float MIUI_CLOSE_PREVIEW_ALPHA = 0.6f;
+    private static final float MIUI_EXPAND_SCRIM_ALPHA = 0.55f;
+    private static final int MIUI_EXPAND_ICON_DP = 28;
+    private static final int MIUI_EXPAND_LABEL_GAP_DP = 8;
 
     private final WindowManagerService mService;
     private final Task mTask;
@@ -85,6 +102,7 @@ final class MomentHandleWindow {
     private WindowManager mWindowManager;
     private HandleView mView;
     private MomentCompactDismissWindow mCompactDismissWindow;
+    private MomentFullscreenPreviewWindow mFullscreenPreviewWindow;
     private boolean mAdded;
     private boolean mSurfaceLayerUpdateScheduled;
     private volatile boolean mDestroyed;
@@ -176,6 +194,7 @@ final class MomentHandleWindow {
                 mCompactDismissWindow.destroy();
                 mCompactDismissWindow = null;
             }
+            destroyFullscreenPreviewWindow();
         });
     }
 
@@ -313,6 +332,18 @@ final class MomentHandleWindow {
         private boolean mExceededTouchSlop;
         private int mResizeEdges = RESIZE_EDGE_NONE;
         private int mMiuiGesture = MIUI_GESTURE_NONE;
+        // Signed bottom-bar swipe progress: 1 at the commit distance downwards (expand), -1
+        // upwards (close).
+        private float mSwipePreview;
+        private float mSwipeOffsetY;
+        private boolean mSwipeArmed;
+        private float mSwipeTaskScale = 1f;
+        private SpringAnimation mSwipeSpring;
+        private final Paint mExpandScrimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mExpandIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mExpandLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF mTmpExpandBounds = new RectF();
+        private final String mExpandLabel;
         private boolean mGestureAborted;
         private int mActivePointerId = MotionEvent.INVALID_POINTER_ID;
         private int mDownRawX;
@@ -348,6 +379,19 @@ final class MomentHandleWindow {
         HandleView(Context context) {
             super(context);
             setClipChildren(false);
+            setWillNotDraw(false);
+            mExpandScrimPaint.setColor(Color.BLACK);
+            mExpandIconPaint.setColor(Color.WHITE);
+            mExpandIconPaint.setStyle(Paint.Style.STROKE);
+            mExpandIconPaint.setStrokeCap(Paint.Cap.ROUND);
+            mExpandIconPaint.setStrokeJoin(Paint.Join.ROUND);
+            mExpandIconPaint.setStrokeWidth(2.5f * context.getResources().getDisplayMetrics().density);
+            mExpandLabelPaint.setColor(Color.WHITE);
+            mExpandLabelPaint.setTextAlign(Paint.Align.CENTER);
+            mExpandLabelPaint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,
+                    14, context.getResources().getDisplayMetrics()));
+            mExpandLabel = "zh".equals(context.getResources().getConfiguration().getLocales()
+                    .get(0).getLanguage()) ? "全屏" : "Fullscreen";
             final ViewConfiguration configuration = ViewConfiguration.get(context);
             mTouchSlop = configuration.getScaledTouchSlop();
             final int doubleTapSlop = configuration.getScaledDoubleTapSlop();
@@ -677,6 +721,7 @@ final class MomentHandleWindow {
                     if (mMiuiGesture != MIUI_GESTURE_NONE) {
                         if (mMiuiGesture == MIUI_GESTURE_BOTTOM_VERTICAL) {
                             mService.mMomentController.animateMomentHandlePress(mTask, false);
+                            animateSwipePreviewTo(0f, this::finishSwipePreview);
                         }
                         mMiuiGesture = MIUI_GESTURE_NONE;
                         mDragMotion.cancel();
@@ -712,10 +757,11 @@ final class MomentHandleWindow {
             }
         }
 
-        /** Top bar drags the window once past the slop; bottom bar only tracks the swipe. */
+        /** Top bar drags the window once past the slop; bottom bar previews the swipe. */
         private void updateMiuiGesture(MotionEvent event) {
             addCompactVelocityMovement(event);
             if (mMiuiGesture == MIUI_GESTURE_BOTTOM_VERTICAL) {
+                updateSwipePreview(event);
                 return;
             }
             final int pointerIndex = getActivePointerIndex(event);
@@ -757,15 +803,168 @@ final class MomentHandleWindow {
             final float velocity = MIUI_SWIPE_VELOCITY_DP * density;
             if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > mTouchSlop) {
                 if (dy > 0 && (dy >= distance || mCompactVelocityY >= velocity)) {
+                    // The expand animation starts from the previewed pose and clears it; only
+                    // the overlay and the outline still fade out.
                     mService.mMomentController.expandMomentTaskAnimated(mTask.mTaskId);
+                    animateSwipePreviewTo(0f, this::finishSwipePreview);
                     return;
                 }
                 if (dy < 0 && (-dy >= distance || -mCompactVelocityY >= velocity)) {
+                    // Closes from the previewed pose; the close removes this window.
                     mService.mMomentController.closeMomentTask(mTask.mTaskId);
                     return;
                 }
             }
             mService.mMomentController.animateMomentHandlePress(mTask, false);
+            animateSwipePreviewTo(0f, this::finishSwipePreview);
+        }
+
+        private void updateSwipePreview(MotionEvent event) {
+            final int pointerIndex = getActivePointerIndex(event);
+            final float dx = event.getRawX(pointerIndex) - mDownRawX;
+            final float dy = event.getRawY(pointerIndex) - mDownRawY;
+            if (!mExceededTouchSlop) {
+                if (Math.abs(dy) <= mTouchSlop || Math.abs(dy) <= Math.abs(dx)) {
+                    return;
+                }
+                mExceededTouchSlop = true;
+                mSwipeTaskScale = mService.mMomentController.getMomentTaskScale(mTask);
+                mHandleSurfaces.hideTop();
+            }
+            cancelSwipeSpring();
+            setSwipePreview(dy / getSwipeDistance(), true /* fromTouch */);
+        }
+
+        private float getSwipeDistance() {
+            return MIUI_SWIPE_DISTANCE_DP * getResources().getDisplayMetrics().density;
+        }
+
+        private void setSwipePreview(float progress, boolean fromTouch) {
+            mSwipePreview = progress;
+            final boolean armed = Math.abs(progress) >= 1f;
+            if (armed != mSwipeArmed) {
+                mSwipeArmed = armed;
+                if (fromTouch) {
+                    vibrate(armed ? VibrationEffect.EFFECT_CLICK : VibrationEffect.EFFECT_TICK);
+                }
+            }
+            final float distance = getSwipeDistance();
+            float scale = 1f;
+            float alpha = 1f;
+            if (progress >= 0f) {
+                mSwipeOffsetY = Math.min(progress * distance * MIUI_EXPAND_FOLLOW,
+                        dpToPx(CORNER_TOUCH_SIZE_DP) / 2f);
+            } else {
+                final float closeProgress = Math.min(1f, -progress);
+                mSwipeOffsetY = progress * distance * MIUI_CLOSE_FOLLOW;
+                scale = 1f - (1f - MIUI_CLOSE_PREVIEW_SCALE) * closeProgress;
+                alpha = 1f - (1f - MIUI_CLOSE_PREVIEW_ALPHA) * closeProgress;
+            }
+            mService.mMomentController.setMomentGesturePreview(mTask, scale, mSwipeOffsetY, alpha);
+            if (progress > 0f || mFullscreenPreviewWindow != null) {
+                getFullscreenPreviewWindow().setProgress(Math.max(0f, progress),
+                        progress >= 1f);
+            }
+            invalidate();
+        }
+
+        private void animateSwipePreviewTo(float target, Runnable endAction) {
+            cancelSwipeSpring();
+            if (mSwipePreview == target) {
+                if (endAction != null) {
+                    endAction.run();
+                }
+                return;
+            }
+            // No overshoot: a down preview must not dip into the close pose on its way back.
+            final SpringAnimation spring = MomentMotion.spring(mSwipePreview, target, 0f,
+                    MomentMotion.EXIT_SPATIAL, 0.002f);
+            spring.addUpdateListener((animation, value, velocity) -> {
+                if (!mDestroyed) {
+                    setSwipePreview(value, false /* fromTouch */);
+                }
+            });
+            spring.addEndListener((animation, canceled, value, velocity) -> {
+                if (mSwipeSpring == spring) {
+                    mSwipeSpring = null;
+                    if (!canceled && !mDestroyed && endAction != null) {
+                        endAction.run();
+                    }
+                }
+            });
+            mSwipeSpring = spring;
+            spring.start();
+        }
+
+        private void cancelSwipeSpring() {
+            final SpringAnimation spring = mSwipeSpring;
+            mSwipeSpring = null;
+            if (spring != null) {
+                spring.cancel();
+            }
+        }
+
+        /** Drops the swipe preview at once and restores the handles. */
+        private void finishSwipePreview() {
+            cancelSwipeSpring();
+            final boolean hadPreview = mSwipePreview != 0f || mSwipeOffsetY != 0f;
+            mSwipePreview = 0f;
+            mSwipeOffsetY = 0f;
+            mSwipeArmed = false;
+            destroyFullscreenPreviewWindow();
+            if (!hadPreview) {
+                return;
+            }
+            mService.mMomentController.setMomentGesturePreview(mTask, 1f, 0f, 1f);
+            if (!mDestroyed) {
+                updateTopHandleSurface();
+            }
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            final float progress = MomentMotion.clamp(mSwipePreview);
+            if (progress <= 0f || mCompact) {
+                return;
+            }
+            // Darken the window and name the action it will take once released.
+            getLocalTaskBounds(mTmpLocalTaskBounds);
+            mTmpExpandBounds.set(mTmpLocalTaskBounds);
+            mTmpExpandBounds.offset(0f, mSwipeOffsetY);
+            final float density = getResources().getDisplayMetrics().density;
+            final float radius = MomentGeometry.getCornerRadius(density) * mSwipeTaskScale;
+            mExpandScrimPaint.setAlpha(Math.round(255f * MIUI_EXPAND_SCRIM_ALPHA * progress));
+            canvas.drawRoundRect(mTmpExpandBounds, radius, radius, mExpandScrimPaint);
+
+            final int contentAlpha = Math.round(255f * progress);
+            mExpandIconPaint.setAlpha(contentAlpha);
+            mExpandLabelPaint.setAlpha(contentAlpha);
+            final Paint.FontMetrics fm = mExpandLabelPaint.getFontMetrics();
+            final float iconSize = MIUI_EXPAND_ICON_DP * density;
+            final float gap = MIUI_EXPAND_LABEL_GAP_DP * density;
+            final float contentHeight = iconSize + gap + (fm.descent - fm.ascent);
+            final float centerX = mTmpExpandBounds.centerX();
+            final float iconTop = mTmpExpandBounds.centerY() - contentHeight / 2f;
+            drawExpandIcon(canvas, centerX - iconSize / 2f, iconTop, iconSize);
+            canvas.drawText(mExpandLabel, centerX, iconTop + iconSize + gap - fm.ascent,
+                    mExpandLabelPaint);
+        }
+
+        /** Four corner brackets pointing outwards. */
+        private void drawExpandIcon(Canvas canvas, float left, float top, float size) {
+            final float arm = size * 0.32f;
+            final float right = left + size;
+            final float bottom = top + size;
+            canvas.drawLine(left, top, left + arm, top, mExpandIconPaint);
+            canvas.drawLine(left, top, left, top + arm, mExpandIconPaint);
+            canvas.drawLine(right, top, right - arm, top, mExpandIconPaint);
+            canvas.drawLine(right, top, right, top + arm, mExpandIconPaint);
+            canvas.drawLine(left, bottom, left + arm, bottom, mExpandIconPaint);
+            canvas.drawLine(left, bottom, left, bottom - arm, mExpandIconPaint);
+            canvas.drawLine(right, bottom, right - arm, bottom, mExpandIconPaint);
+            canvas.drawLine(right, bottom, right, bottom - arm, mExpandIconPaint);
         }
 
         @Override
@@ -964,6 +1163,7 @@ final class MomentHandleWindow {
             mDragging = false;
             mExceededTouchSlop = false;
             mMiuiGesture = MIUI_GESTURE_NONE;
+            finishSwipePreview();
             mActivePointerId = MotionEvent.INVALID_POINTER_ID;
             resetResizeGesture();
         }
@@ -1259,6 +1459,20 @@ final class MomentHandleWindow {
             mCompactDismissWindow = new MomentCompactDismissWindow(mContext, mTask);
         }
         return mCompactDismissWindow;
+    }
+
+    private MomentFullscreenPreviewWindow getFullscreenPreviewWindow() {
+        if (mFullscreenPreviewWindow == null) {
+            mFullscreenPreviewWindow = new MomentFullscreenPreviewWindow(mContext, mTask);
+        }
+        return mFullscreenPreviewWindow;
+    }
+
+    private void destroyFullscreenPreviewWindow() {
+        if (mFullscreenPreviewWindow != null) {
+            mFullscreenPreviewWindow.destroy();
+            mFullscreenPreviewWindow = null;
+        }
     }
 
 }
